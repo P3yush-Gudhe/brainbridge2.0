@@ -1,0 +1,8 @@
+{
+  "name": "StudyMate — Your Study Workspace",
+  "description": "StudyMate is a thoughtful study workspace for modern students. Organize notes, practice with flashcards, solve problems, and plan your academic journey.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
