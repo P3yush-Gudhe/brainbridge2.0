@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import Editor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Play, Brain, Bug, Zap, ChevronDown, Terminal, Loader2, RotateCcw } from 'lucide-react'
+import { Play, Brain, Bug, Zap, ChevronDown, Terminal, Loader2, RotateCcw, AlertCircle } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { cn } from '@/lib/utils'
 import api from '@/lib/api'
@@ -87,6 +87,7 @@ export function CodePlaygroundPage() {
   const [output, setOutput] = useState('')
   const [running, setRunning] = useState(false)
   const [aiOutput, setAiOutput] = useState('')
+  const [aiError, setAiError] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [showLangMenu, setShowLangMenu] = useState(false)
 
@@ -109,12 +110,15 @@ export function CodePlaygroundPage() {
   const handleAI = async (action: 'explain' | 'debug' | 'optimize') => {
     setAiLoading(true)
     setAiOutput('')
+    setAiError(null)
     try {
       const response = await api.post('/ai/code', { action, language, code })
       setAiOutput(response.data?.analysis || '')
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string }
-      toast.error(err.response?.data?.error || err.message || 'AI analysis failed')
+      const msg = err.response?.data?.error || err.message || 'AI analysis failed'
+      setAiError(msg)
+      toast.error(msg)
     } finally {
       setAiLoading(false)
     }
@@ -125,6 +129,7 @@ export function CodePlaygroundPage() {
     setCode(SAMPLE_CODE[lang] || '')
     setOutput('')
     setAiOutput('')
+    setAiError(null)
     setShowLangMenu(false)
   }
 
@@ -176,7 +181,7 @@ export function CodePlaygroundPage() {
         </button>
 
         <div className="flex-1" />
-        <button onClick={() => { setCode(SAMPLE_CODE[language]); setOutput(''); setAiOutput('') }} className="btn-icon-sm btn-ghost text-[#707070]" title="Reset">
+        <button onClick={() => { setCode(SAMPLE_CODE[language]); setOutput(''); setAiOutput(''); setAiError(null) }} className="btn-icon-sm btn-ghost text-[#707070]" title="Reset">
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -227,7 +232,7 @@ export function CodePlaygroundPage() {
             </div>
           </div>
 
-          {(aiOutput || aiLoading) && (
+          {(aiOutput || aiLoading || aiError) && (
             <div className="border-t border-[#E7E5E0] flex flex-col max-h-60">
               <div className="flex items-center gap-2 px-4 py-2 border-b border-[#E7E5E0] bg-[#FAF9F6]">
                 <Brain className="w-3.5 h-3.5 text-[#5965B3]" />
@@ -238,6 +243,11 @@ export function CodePlaygroundPage() {
                   <div className="flex items-center gap-2 text-[#5965B3]">
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     Analyzing code...
+                  </div>
+                ) : aiError ? (
+                  <div className="p-2.5 rounded-lg bg-[#FBEFEF] border border-[#B45D5D]/30 text-[#B45D5D] flex items-start gap-2">
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>{aiError}</span>
                   </div>
                 ) : (
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="prose-studymate text-xs">

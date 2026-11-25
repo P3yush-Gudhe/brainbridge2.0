@@ -3,6 +3,7 @@ import type { Response } from 'express'
 import { requireAuth, type AuthRequest } from '../src/middleware/auth.ts'
 import { deleteUserById, updateUserProfile } from '../src/db/users.ts'
 import {
+  addCardsToDeck,
   appendChatMessages,
   createAttendanceSubject,
   createCgpaCourse,
@@ -15,6 +16,7 @@ import {
   deleteAttendanceSubject,
   deleteCgpaCourse,
   deleteChatConversation,
+  deleteFlashcard,
   deleteStudyExam,
   deleteStudyTask,
   deleteUserDeck,
@@ -22,6 +24,7 @@ import {
   exportAllUserData,
   getAnalyticsAndMilestones,
   getDashboardSummary,
+  getLeaderboard,
   listAttendanceSubjects,
   listCgpaSemesters,
   listChatConversations,
@@ -119,6 +122,15 @@ dbRouter.get('/analytics', async (req: AuthRequest, res: Response) => {
     res.json(data)
   } catch (error) {
     handleError(res, error, 'Failed to load analytics')
+  }
+})
+
+dbRouter.get('/leaderboard', async (req: AuthRequest, res: Response) => {
+  try {
+    const entries = await getLeaderboard(req.dbUser!.id)
+    res.json({ entries })
+  } catch (error) {
+    handleError(res, error, 'Failed to load leaderboard')
   }
 })
 
@@ -276,6 +288,69 @@ dbRouter.delete('/flashcards/decks/:id', async (req: AuthRequest, res: Response)
   }
 })
 
+dbRouter.post('/flashcards/decks/:id/cards', async (req: AuthRequest, res: Response) => {
+  try {
+    const deckId = parsePositiveId(req.params.id)
+    if (!deckId) {
+      res.status(400).json({ error: 'Invalid deck ID' })
+      return
+    }
+    const rawCards = Array.isArray(req.body?.cards)
+      ? req.body.cards
+      : req.body?.front && req.body?.back
+        ? [{ front: req.body.front, back: req.body.back }]
+        : []
+    const cards = rawCards
+      .filter(
+        (c: unknown): c is { front: string; back: string } =>
+          Boolean(
+            c &&
+              typeof (c as { front?: unknown }).front === 'string' &&
+              (c as { front: string }).front.trim() &&
+              typeof (c as { back?: unknown }).back === 'string' &&
+              (c as { back: string }).back.trim()
+          )
+      )
+      .slice(0, 50)
+      .map((c: { front: string; back: string }) => ({
+        front: c.front.trim().slice(0, 500),
+        back: c.back.trim().slice(0, 1000),
+      }))
+
+    if (!cards.length) {
+      res.status(400).json({ error: 'Card front and back text are required' })
+      return
+    }
+
+    const inserted = await addCardsToDeck(req.dbUser!.id, deckId, cards)
+    if (!inserted) {
+      res.status(404).json({ error: 'Deck not found' })
+      return
+    }
+    res.status(201).json({ cards: inserted })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+dbRouter.delete('/flashcards/cards/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const cardId = parsePositiveId(req.params.id)
+    if (!cardId) {
+      res.status(400).json({ error: 'Invalid card ID' })
+      return
+    }
+    const ok = await deleteFlashcard(req.dbUser!.id, cardId)
+    if (!ok) {
+      res.status(404).json({ error: 'Flashcard not found' })
+      return
+    }
+    res.json({ ok: true })
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
 // ── Study Planner ────────────────────────────────────────────────────────────
 
 dbRouter.get('/planner', async (req: AuthRequest, res: Response) => {
@@ -415,6 +490,210 @@ dbRouter.post('/quizzes/attempts', async (req: AuthRequest, res: Response) => {
     res.status(201).json(result)
   } catch (error) {
     handleError(res, error)
+  }
+})
+
+// Live Public Academic Question Bank (Open Trivia DB — no API key required)
+const OPENTDB_CATEGORIES: Record<string, number> = {
+  Mathematics: 19,
+  'Computer Science': 18,
+  Physics: 17,
+  Chemistry: 17,
+  Biology: 17,
+  History: 23,
+  Geography: 22,
+  English: 10,
+}
+
+function decodeHtmlEntities(str: string): string {
+  const named: Record<string, string> = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    '#039': "'",
+    ldquo: '"',
+    rdquo: '"',
+    lsquo: "'",
+    rsquo: "'",
+    ndash: '–',
+    mdash: '—',
+    hellip: '...',
+    deg: '°',
+    pi: 'π',
+    times: '×',
+    divide: '÷',
+    minus: '−',
+    plusmn: '±',
+    radic: '√',
+    infin: '∞',
+    ne: '≠',
+    le: '≤',
+    ge: '≥',
+    eacute: 'é',
+    aacute: 'á',
+    iacute: 'í',
+    oacute: 'ó',
+    uacute: 'ú',
+    ntilde: 'ñ',
+    uuml: 'ü',
+  }
+  return str.replace(/&([a-zA-Z0-9#]+);/g, (full, entity: string) => {
+    if (entity in named) return named[entity]
+    if (entity.startsWith('#x')) {
+      const code = parseInt(entity.slice(2), 16)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : full
+    }
+    if (entity.startsWith('#')) {
+      const code = parseInt(entity.slice(1), 10)
+      return Number.isFinite(code) ? String.fromCodePoint(code) : full
+    }
+    return full
+  })
+}
+
+dbRouter.get('/quizzes/bank', async (req: AuthRequest, res: Response) => {
+  try {
+    const subject = String(req.query.subject || 'Computer Science').trim()
+    const difficulty = String(req.query.difficulty || 'medium').trim()
+    const qType = req.query.type === 'truefalse' ? 'boolean' : 'multiple'
+    const count = Math.min(20, Math.max(1, Number(req.query.count) || 5))
+    const category = OPENTDB_CATEGORIES[subject] ?? 17
+
+    const fetchBank = async (params: Record<string, string>) => {
+      const qs = new URLSearchParams(params).toString()
+      const resp = await fetch(`https://opentdb.com/api.php?${qs}`)
+      if (!resp.ok) throw new Error(`Question bank error (${resp.status})`)
+      return (await resp.json()) as {
+        response_code: number
+        results?: Array<{
+          category: string
+          type: string
+          difficulty: string
+          question: string
+          correct_answer: string
+          incorrect_answers: string[]
+        }>
+      }
+    }
+
+    let data = await fetchBank({
+      amount: String(count),
+      category: String(category),
+      difficulty: ['easy', 'medium', 'hard'].includes(difficulty) ? difficulty : 'medium',
+      type: qType,
+    })
+
+    if ((data.response_code !== 0 || !data.results?.length)) {
+      data = await fetchBank({
+        amount: String(count),
+        category: String(category),
+        type: qType,
+      })
+    }
+
+    if ((data.response_code !== 0 || !data.results?.length)) {
+      data = await fetchBank({
+        amount: String(count),
+        category: String(category),
+      })
+    }
+
+    if ((data.response_code !== 0 || !data.results?.length)) {
+      data = await fetchBank({
+        amount: String(count),
+        type: qType,
+      })
+    }
+
+    const rawResults = data.results || []
+    if (!rawResults.length) {
+      res.status(502).json({ error: 'Could not load questions for this filter. Try another count or subject.' })
+      return
+    }
+
+    const questions = rawResults.map((item, idx) => {
+      const correctAns = decodeHtmlEntities(item.correct_answer)
+      const incorrect = item.incorrect_answers.map(decodeHtmlEntities)
+      let options: string[]
+      if (item.type === 'boolean') {
+        options = ['True', 'False']
+      } else {
+        options = [...incorrect, correctAns]
+        for (let i = options.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[options[i], options[j]] = [options[j], options[i]]
+        }
+      }
+      const correctIdx = options.indexOf(correctAns)
+      return {
+        id: `bank-${Date.now()}-${idx}`,
+        question: decodeHtmlEntities(item.question),
+        options,
+        correct: correctIdx >= 0 ? correctIdx : 0,
+        explanation: `Category: ${decodeHtmlEntities(item.category)} (${item.difficulty}) • Correct answer: ${correctAns}`,
+      }
+    })
+
+    res.json({ questions, source: 'Open Trivia DB' })
+  } catch (error) {
+    handleError(res, error, 'Failed to fetch live quiz questions')
+  }
+})
+
+// YouTube oEmbed Metadata Lookup (no API key required)
+dbRouter.get('/youtube/info', async (req: AuthRequest, res: Response) => {
+  try {
+    const rawUrl = String(req.query.url || '').trim()
+    if (!rawUrl) {
+      res.status(400).json({ error: 'YouTube URL is required' })
+      return
+    }
+
+    let videoId = ''
+    try {
+      const parsed = new URL(rawUrl)
+      if (parsed.hostname.includes('youtu.be')) {
+        videoId = parsed.pathname.replace(/^\//, '').split('/')[0] || ''
+      } else {
+        videoId = parsed.searchParams.get('v') || ''
+        if (!videoId && parsed.pathname.includes('/embed/')) {
+          videoId = parsed.pathname.split('/embed/')[1]?.split('/')[0] || ''
+        }
+      }
+    } catch {
+      res.status(400).json({ error: 'Invalid YouTube URL' })
+      return
+    }
+
+    if (!videoId) {
+      res.status(400).json({ error: 'Could not find a YouTube video ID in that URL' })
+      return
+    }
+
+    const oembedRes = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(rawUrl)}&format=json`
+    )
+    if (!oembedRes.ok) {
+      res.status(404).json({ error: 'Could not load video details from YouTube' })
+      return
+    }
+
+    const meta = (await oembedRes.json()) as {
+      title?: string
+      author_name?: string
+      thumbnail_url?: string
+    }
+
+    res.json({
+      videoId,
+      title: meta.title || 'YouTube Video',
+      channel: meta.author_name || 'YouTube',
+      thumbnailUrl: meta.thumbnail_url || '',
+    })
+  } catch (error) {
+    handleError(res, error, 'Failed to load YouTube video info')
   }
 })
 

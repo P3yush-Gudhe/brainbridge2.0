@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import {
-  Clock, CheckCircle2, XCircle, RefreshCw, Sparkles, AlertCircle, History
+  Clock, CheckCircle2, XCircle, RefreshCw, Sparkles, AlertCircle, History,
+  Globe, PenLine, Plus, Trash2
 } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import { Button } from '@/components/ui/Button'
@@ -39,21 +40,37 @@ interface QuizAttempt {
   createdAt: string
 }
 
+interface CustomDraft {
+  question: string
+  options: [string, string, string, string]
+  correct: number
+  explanation: string
+}
+
 const SUBJECTS = ['Mathematics', 'Physics', 'Chemistry', 'Biology', 'Computer Science', 'History', 'Geography', 'English']
 
 type QuizPhase = 'config' | 'quiz' | 'results'
+type QuizSourceMode = 'bank' | 'ai' | 'custom'
 
 export function QuizPage() {
   const { refreshSessionUser } = useAuthStore()
   const [phase, setPhase] = useState<QuizPhase>('config')
+  const [sourceMode, setSourceMode] = useState<QuizSourceMode>('bank')
   const [config, setConfig] = useState<QuizConfig>({
-    subject: 'Mathematics',
+    subject: 'Computer Science',
     topic: '',
     difficulty: 'medium',
     type: 'mcq',
     count: 5,
     timed: true,
     timePerQ: 30,
+  })
+  const [customQuestions, setCustomQuestions] = useState<Question[]>([])
+  const [draft, setDraft] = useState<CustomDraft>({
+    question: '',
+    options: ['', '', '', ''],
+    correct: 0,
+    explanation: '',
   })
   const [questions, setQuestions] = useState<Question[]>([])
   const [current, setCurrent] = useState(0)
@@ -91,18 +108,77 @@ export function QuizPage() {
     }, 700)
   }, [current, questions.length, config.timePerQ])
 
+  const addCustomQuestion = () => {
+    if (!draft.question.trim()) {
+      toast.error('Please enter a question')
+      return
+    }
+    const cleanOpts = draft.options.map(o => o.trim()).filter(Boolean)
+    if (cleanOpts.length < 2) {
+      toast.error('Please provide at least 2 answer options')
+      return
+    }
+    const safeCorrect = draft.correct < cleanOpts.length ? draft.correct : 0
+    const next: Question = {
+      id: `custom-${Date.now()}-${customQuestions.length}`,
+      question: draft.question.trim(),
+      options: cleanOpts,
+      correct: safeCorrect,
+      explanation: draft.explanation.trim() || `Correct answer: ${cleanOpts[safeCorrect]}`,
+    }
+    setCustomQuestions(prev => [...prev, next])
+    setDraft({
+      question: '',
+      options: ['', '', '', ''],
+      correct: 0,
+      explanation: '',
+    })
+    toast.success('Question added to custom quiz')
+  }
+
   const startQuiz = async () => {
-    setGenerating(true)
     setAiError(null)
+
+    if (sourceMode === 'custom') {
+      if (!customQuestions.length) {
+        const msg = 'Add at least 1 custom question below before starting.'
+        setAiError(msg)
+        toast.error(msg)
+        return
+      }
+      savedAttemptRef.current = false
+      setQuestions(customQuestions)
+      setCurrent(0)
+      setAnswers({})
+      setTimeLeft(config.timePerQ)
+      setPhase('quiz')
+      return
+    }
+
+    setGenerating(true)
     try {
-      const response = await api.post('/ai/quiz', {
-        subject: config.subject,
-        topic: config.topic.trim() || undefined,
-        difficulty: config.difficulty,
-        type: config.type,
-        count: config.count,
-      })
-      const generated: Question[] = response.data?.questions || []
+      let generated: Question[] = []
+      if (sourceMode === 'bank') {
+        const response = await api.get('/quizzes/bank', {
+          params: {
+            subject: config.subject,
+            difficulty: config.difficulty,
+            type: config.type,
+            count: config.count,
+          },
+        })
+        generated = response.data?.questions || []
+      } else {
+        const response = await api.post('/ai/quiz', {
+          subject: config.subject,
+          topic: config.topic.trim() || undefined,
+          difficulty: config.difficulty,
+          type: config.type,
+          count: config.count,
+        })
+        generated = response.data?.questions || []
+      }
+
       if (!generated.length) {
         const msg = 'No quiz questions were returned. Please try again.'
         setAiError(msg)
@@ -117,7 +193,7 @@ export function QuizPage() {
       setPhase('quiz')
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string }
-      const msg = err.response?.data?.error || err.message || 'Failed to generate quiz'
+      const msg = err.response?.data?.error || err.message || 'Failed to load quiz'
       setAiError(msg)
       toast.error(msg)
     } finally {
@@ -157,20 +233,43 @@ export function QuizPage() {
       savedAttemptRef.current = true
       void api.post('/quizzes/attempts', {
         subject: config.subject,
-        topic: config.topic.trim() || undefined,
+        topic: config.topic.trim() || (sourceMode === 'custom' ? 'Custom Quiz' : undefined),
         difficulty: config.difficulty,
         score,
         totalQuestions: questions.length,
       }).then(() => Promise.all([refreshSessionUser(), loadAttempts()])).catch(() => {})
     }
-  }, [phase, questions.length, config.subject, config.topic, config.difficulty, score, refreshSessionUser, loadAttempts])
+  }, [phase, questions.length, config.subject, config.topic, config.difficulty, sourceMode, score, refreshSessionUser, loadAttempts])
 
   if (phase === 'config') {
     return (
       <div className="p-6 md:p-8 max-w-2xl mx-auto space-y-6">
         <div>
-          <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Quiz Generator</h1>
-          <p className="text-[#707070] text-sm mt-1">Practice topic knowledge with AI-generated questions</p>
+          <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Quiz Practice</h1>
+          <p className="text-[#707070] text-sm mt-1">Practice with the live academic question bank, AI topic generator, or custom quizzes</p>
+        </div>
+
+        {/* Mode Switcher */}
+        <div className="grid grid-cols-3 gap-2 p-1 bg-white border border-[#E7E5E0] rounded-xl">
+          {[
+            { id: 'bank' as const, label: 'Question Bank', icon: Globe },
+            { id: 'ai' as const, label: 'AI Topic Quiz', icon: Sparkles },
+            { id: 'custom' as const, label: 'Custom Builder', icon: PenLine },
+          ].map(m => (
+            <button
+              key={m.id}
+              onClick={() => { setSourceMode(m.id); setAiError(null) }}
+              className={cn(
+                'flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-medium transition-all',
+                sourceMode === m.id
+                  ? 'bg-[#ECEEF7] text-[#5965B3] font-semibold'
+                  : 'text-[#707070] hover:text-[#252525] hover:bg-[#FAF9F6]'
+              )}
+            >
+              <m.icon className="w-3.5 h-3.5" />
+              <span>{m.label}</span>
+            </button>
+          ))}
         </div>
 
         <div className="card p-6 bg-white border-[#E7E5E0] space-y-5">
@@ -188,76 +287,151 @@ export function QuizPage() {
             </div>
           </div>
 
-          <Input
-            id="quiz-topic"
-            label="Topic (optional)"
-            placeholder="e.g. Integration by Parts, Thermodynamics, Cell Division..."
-            value={config.topic}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfig(c => ({ ...c, topic: e.target.value }))}
-          />
+          {sourceMode === 'ai' && (
+            <Input
+              id="quiz-topic"
+              label="Topic (optional)"
+              placeholder="e.g. Integration by Parts, Thermodynamics, Cell Division..."
+              value={config.topic}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setConfig(c => ({ ...c, topic: e.target.value }))}
+            />
+          )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="input-label">Question Type</label>
-              <div className="flex gap-2">
-                {([{ id: 'mcq', label: 'Multiple Choice' }, { id: 'truefalse', label: 'True / False' }] as const).map(t => (
-                  <button key={t.id} onClick={() => setConfig(c => ({ ...c, type: t.id }))}
-                    className={cn('flex-1 py-2 px-2.5 rounded-lg text-xs font-medium transition-all border',
-                      config.type === t.id ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]' : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6] hover:border-[#D4D2CD]'
-                    )}>
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+          {sourceMode !== 'custom' ? (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Question Type</label>
+                  <div className="flex gap-2">
+                    {([{ id: 'mcq', label: 'Multiple Choice' }, { id: 'truefalse', label: 'True / False' }] as const).map(t => (
+                      <button key={t.id} onClick={() => setConfig(c => ({ ...c, type: t.id }))}
+                        className={cn('flex-1 py-2 px-2.5 rounded-lg text-xs font-medium transition-all border',
+                          config.type === t.id ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]' : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6] hover:border-[#D4D2CD]'
+                        )}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-            <div>
-              <label className="input-label">Difficulty</label>
-              <div className="flex gap-2">
-                {(['easy', 'medium', 'hard'] as const).map(d => (
-                  <button key={d} onClick={() => setConfig(c => ({ ...c, difficulty: d }))}
-                    className={cn('flex-1 py-2 rounded-lg text-xs font-medium transition-all border capitalize',
-                      config.difficulty === d
-                        ? d === 'easy' ? 'bg-[#EDF5F0] border-[#5C8A6A] text-[#5C8A6A]'
-                          : d === 'medium' ? 'bg-[#FBF5EC] border-[#B4863A] text-[#B4863A]'
-                          : 'bg-[#FBEFEF] border-[#B45D5D] text-[#B45D5D]'
-                        : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6] hover:border-[#D4D2CD]'
-                    )}>
-                    {d}
-                  </button>
-                ))}
+                <div>
+                  <label className="input-label">Difficulty</label>
+                  <div className="flex gap-2">
+                    {(['easy', 'medium', 'hard'] as const).map(d => (
+                      <button key={d} onClick={() => setConfig(c => ({ ...c, difficulty: d }))}
+                        className={cn('flex-1 py-2 rounded-lg text-xs font-medium transition-all border capitalize',
+                          config.difficulty === d
+                            ? d === 'easy' ? 'bg-[#EDF5F0] border-[#5C8A6A] text-[#5C8A6A]'
+                              : d === 'medium' ? 'bg-[#FBF5EC] border-[#B4863A] text-[#B4863A]'
+                              : 'bg-[#FBEFEF] border-[#B45D5D] text-[#B45D5D]'
+                            : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6] hover:border-[#D4D2CD]'
+                        )}>
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="input-label">Number of questions</label>
-              <div className="flex gap-1.5">
-                {[5, 10, 15, 20].map(n => (
-                  <button key={n} onClick={() => setConfig(c => ({ ...c, count: n }))}
-                    className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium transition-all border',
-                      config.count === n ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]' : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6]'
-                    )}>
-                    {n}
-                  </button>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Number of questions</label>
+                  <div className="flex gap-1.5">
+                    {[5, 10, 15, 20].map(n => (
+                      <button key={n} onClick={() => setConfig(c => ({ ...c, count: n }))}
+                        className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium transition-all border',
+                          config.count === n ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]' : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6]'
+                        )}>
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="input-label">Time per question</label>
+                  <div className="flex gap-1.5">
+                    {[15, 30, 60].map(t => (
+                      <button key={t} onClick={() => setConfig(c => ({ ...c, timePerQ: t }))}
+                        className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium transition-all border',
+                          config.timePerQ === t ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]' : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6]'
+                        )}>
+                        {t}s
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-4 p-4 rounded-xl bg-[#FAF9F6] border border-[#E7E5E0]">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-[#252525]">Add Custom Question</span>
+                <Badge variant="brand">{customQuestions.length} added</Badge>
+              </div>
+              <Input
+                id="custom-q"
+                label="Question"
+                placeholder="Enter your question..."
+                value={draft.question}
+                onChange={e => setDraft(d => ({ ...d, question: e.target.value }))}
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {draft.options.map((opt, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setDraft(d => ({ ...d, correct: idx }))}
+                      className={cn(
+                        'w-6 h-6 rounded-md text-xs font-bold flex-shrink-0 border transition-all',
+                        draft.correct === idx
+                          ? 'bg-[#5C8A6A] border-[#5C8A6A] text-white'
+                          : 'bg-white border-[#E7E5E0] text-[#707070]'
+                      )}
+                      title="Mark as correct option"
+                    >
+                      {['A', 'B', 'C', 'D'][idx]}
+                    </button>
+                    <input
+                      value={opt}
+                      onChange={e => {
+                        const nextOpts = [...draft.options] as [string, string, string, string]
+                        nextOpts[idx] = e.target.value
+                        setDraft(d => ({ ...d, options: nextOpts }))
+                      }}
+                      placeholder={`Option ${['A', 'B', 'C', 'D'][idx]}${idx >= 2 ? ' (optional)' : ''}`}
+                      className="input py-1.5 text-xs flex-1"
+                    />
+                  </div>
                 ))}
               </div>
+              <Input
+                id="custom-exp"
+                label="Explanation (optional)"
+                placeholder="Why is this option correct?"
+                value={draft.explanation}
+                onChange={e => setDraft(d => ({ ...d, explanation: e.target.value }))}
+              />
+              <Button type="button" variant="secondary" size="sm" onClick={addCustomQuestion} leftIcon={<Plus className="w-3.5 h-3.5" />}>
+                Add question to quiz
+              </Button>
+
+              {customQuestions.length > 0 && (
+                <div className="space-y-1.5 pt-2 border-t border-[#E7E5E0]">
+                  {customQuestions.map((cq, i) => (
+                    <div key={cq.id} className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-[#E7E5E0] text-xs">
+                      <span className="truncate font-medium text-[#252525]">{i + 1}. {cq.question}</span>
+                      <button
+                        onClick={() => setCustomQuestions(prev => prev.filter(item => item.id !== cq.id))}
+                        className="text-[#999999] hover:text-[#B45D5D] flex-shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div>
-              <label className="input-label">Time per question</label>
-              <div className="flex gap-1.5">
-                {[15, 30, 60].map(t => (
-                  <button key={t} onClick={() => setConfig(c => ({ ...c, timePerQ: t }))}
-                    className={cn('flex-1 py-1.5 rounded-lg text-xs font-medium transition-all border',
-                      config.timePerQ === t ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]' : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6]'
-                    )}>
-                    {t}s
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          )}
 
           <label className="flex items-center gap-3 cursor-pointer select-none">
             <div onClick={() => setConfig(c => ({ ...c, timed: !c.timed }))}
@@ -275,8 +449,20 @@ export function QuizPage() {
             </div>
           )}
 
-          <Button size="lg" onClick={startQuiz} isLoading={generating} className="w-full gap-2" leftIcon={<Sparkles className="w-4 h-4" />}>
-            {generating ? 'Generating Quiz...' : 'Generate & Start Quiz'}
+          <Button
+            size="lg"
+            onClick={startQuiz}
+            isLoading={generating}
+            className="w-full gap-2"
+            leftIcon={sourceMode === 'ai' ? <Sparkles className="w-4 h-4" /> : sourceMode === 'bank' ? <Globe className="w-4 h-4" /> : <PenLine className="w-4 h-4" />}
+          >
+            {generating
+              ? 'Loading Quiz...'
+              : sourceMode === 'ai'
+                ? 'Generate & Start AI Quiz'
+                : sourceMode === 'bank'
+                  ? 'Start Live Quiz'
+                  : `Start Custom Quiz (${customQuestions.length})`}
           </Button>
         </div>
 

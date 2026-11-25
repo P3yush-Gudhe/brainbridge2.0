@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plus, Search, Trash2, Tag, Download, Eye, Edit3,
-  Clock, FileText, Brain, Wand2, Languages, Sparkles
+  Clock, FileText, Brain, Wand2, Languages, Sparkles, AlertCircle, X
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -57,6 +57,7 @@ export function NotesPage() {
   const [search, setSearch] = useState('')
   const [previewMode, setPreviewMode] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
   const [showTagModal, setShowTagModal] = useState(false)
   const [newTag, setNewTag] = useState('')
   const [saved, setSaved] = useState(true)
@@ -174,6 +175,7 @@ export function NotesPage() {
   const handleAITool = async (action: string) => {
     if (!activeNote) return
     setAiLoading(true)
+    setAiError(null)
     try {
       const response = await api.post('/ai/notes', {
         action,
@@ -183,7 +185,9 @@ export function NotesPage() {
       })
       const { result, mode } = response.data as { result?: string; mode?: 'replace' | 'append' }
       if (!result) {
-        toast.error('No output returned')
+        const msg = 'No output returned'
+        setAiError(msg)
+        toast.error(msg)
         return
       }
       const nextContent = mode === 'append'
@@ -193,7 +197,9 @@ export function NotesPage() {
       toast.success(`Note ${action}d`)
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string }
-      toast.error(err.response?.data?.error || err.message || 'AI action failed')
+      const msg = err.response?.data?.error || err.message || 'AI action failed'
+      setAiError(msg)
+      toast.error(msg)
     } finally {
       setAiLoading(false)
     }
@@ -297,6 +303,18 @@ export function NotesPage() {
               <Download className="w-4 h-4" />
             </button>
           </div>
+
+          {aiError && (
+            <div className="mx-8 mt-4 p-3 rounded-lg bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{aiError}</span>
+              </div>
+              <button onClick={() => setAiError(null)} className="text-[#B45D5D] hover:opacity-70">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           <div className="px-8 pt-6 pb-2">
             <input

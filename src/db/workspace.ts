@@ -195,6 +195,48 @@ export async function deleteUserDeck(userId: number, deckId: number) {
   }
 }
 
+export async function addCardsToDeck(
+  userId: number,
+  deckId: number,
+  cards: Array<{ front: string; back: string }>
+) {
+  try {
+    const [deck] = await db
+      .select({ id: flashcardDecks.id })
+      .from(flashcardDecks)
+      .where(and(eq(flashcardDecks.id, deckId), eq(flashcardDecks.userId, userId)))
+      .limit(1)
+    if (!deck) return null
+
+    if (!cards.length) return []
+    return await db
+      .insert(flashcards)
+      .values(
+        cards.map((c) => ({
+          deckId,
+          userId,
+          front: c.front,
+          back: c.back,
+        }))
+      )
+      .returning()
+  } catch (error) {
+    throw dbErr('add flashcards', error)
+  }
+}
+
+export async function deleteFlashcard(userId: number, cardId: number) {
+  try {
+    const deleted = await db
+      .delete(flashcards)
+      .where(and(eq(flashcards.id, cardId), eq(flashcards.userId, userId)))
+      .returning({ id: flashcards.id })
+    return deleted.length > 0
+  } catch (error) {
+    throw dbErr('delete flashcard', error)
+  }
+}
+
 // ── Study Planner (Exams & Tasks) ────────────────────────────────────────────
 
 export async function listPlannerData(userId: number) {
@@ -1059,6 +1101,69 @@ export async function getAnalyticsAndMilestones(userId: number) {
     }
   } catch (error) {
     throw dbErr('load analytics', error)
+  }
+}
+
+export async function getLeaderboard(currentUserId: number) {
+  try {
+    const [allUsers, allPomodoros] = await Promise.all([
+      db
+        .select({
+          id: users.id,
+          name: users.name,
+          xp: users.xp,
+          level: users.level,
+          streak: users.streak,
+        })
+        .from(users)
+        .orderBy(desc(users.xp), desc(users.streak))
+        .limit(50),
+      db
+        .select({
+          userId: pomodoroSessions.userId,
+          durationMinutes: pomodoroSessions.durationMinutes,
+          completedAt: pomodoroSessions.completedAt,
+        })
+        .from(pomodoroSessions),
+    ])
+
+    const weekAgo = Date.now() - 7 * 86400000
+    const minsByUser = new Map<number, number>()
+    for (const p of allPomodoros) {
+      if (p.completedAt.getTime() >= weekAgo) {
+        minsByUser.set(p.userId, (minsByUser.get(p.userId) ?? 0) + p.durationMinutes)
+      }
+    }
+
+    const sorted = allUsers
+      .map((u) => {
+        const weeklyHours = Math.round(((minsByUser.get(u.id) ?? 0) / 60) * 10) / 10
+        const initials = u.name
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((part) => part[0]?.toUpperCase() || '')
+          .join('') || 'S'
+        return {
+          id: u.id,
+          name: u.name,
+          avatar: initials,
+          xp: u.xp,
+          level: u.level,
+          streak: u.streak,
+          hours: weeklyHours,
+          isCurrentUser: u.id === currentUserId,
+        }
+      })
+      .sort((a, b) => b.xp - a.xp || b.hours - a.hours || b.streak - a.streak)
+      .map((entry, idx) => ({
+        ...entry,
+        rank: idx + 1,
+      }))
+
+    return sorted
+  } catch (error) {
+    throw dbErr('load leaderboard', error)
   }
 }
 

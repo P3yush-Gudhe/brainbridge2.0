@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Video, Brain, FileText, List, HelpCircle, Zap, Loader2, Clock, RotateCcw, AlertCircle } from 'lucide-react'
+import { Video, Brain, FileText, List, HelpCircle, Zap, Loader2, Clock, RotateCcw, AlertCircle, BookOpen, Play } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Button } from '@/components/ui/Button'
@@ -12,6 +12,12 @@ import { cn } from '@/lib/utils'
 import api from '@/lib/api'
 
 type YTTab = 'summary' | 'notes' | 'transcript' | 'quiz' | 'flashcards'
+
+interface VideoPreview {
+  videoId: string
+  title: string
+  channel: string
+}
 
 interface YouTubeAnalysis {
   title: string
@@ -26,6 +32,10 @@ interface YouTubeAnalysis {
 
 export function YouTubeLearningPage() {
   const [url, setUrl] = useState('')
+  const [loadingPreview, setLoadingPreview] = useState(false)
+  const [preview, setPreview] = useState<VideoPreview | null>(null)
+  const [videoNotes, setVideoNotes] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const [analysis, setAnalysis] = useState<YouTubeAnalysis | null>(null)
@@ -33,6 +43,23 @@ export function YouTubeLearningPage() {
   const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({})
   const [quizSubmitted, setQuizSubmitted] = useState(false)
   const [flippedCards, setFlippedCards] = useState<Record<number, boolean>>({})
+
+  const loadVideoPreview = async (overrideUrl?: string) => {
+    const targetUrl = (overrideUrl ?? url).trim()
+    if (!targetUrl) { toast.error('Please enter a YouTube URL'); return }
+    setLoadingPreview(true)
+    setAiError(null)
+    try {
+      const res = await api.get('/youtube/info', { params: { url: targetUrl } })
+      setPreview(res.data as VideoPreview)
+      toast.success('Video loaded')
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(err.response?.data?.error || err.message || 'Could not load YouTube video')
+    } finally {
+      setLoadingPreview(false)
+    }
+  }
 
   const processVideo = async (overrideUrl?: string) => {
     const targetUrl = (overrideUrl ?? url).trim()
@@ -43,6 +70,12 @@ export function YouTubeLearningPage() {
     setQuizAnswers({})
     setQuizSubmitted(false)
     setFlippedCards({})
+
+    // Also load the embedded player & metadata cleanly in parallel
+    void api.get('/youtube/info', { params: { url: targetUrl } })
+      .then((res) => setPreview(res.data as VideoPreview))
+      .catch(() => {})
+
     try {
       const response = await api.post('/ai/youtube', { url: targetUrl })
       setAnalysis(response.data as YouTubeAnalysis)
@@ -58,6 +91,26 @@ export function YouTubeLearningPage() {
     }
   }
 
+  const saveStudyNotes = async () => {
+    if (!videoNotes.trim()) {
+      toast.error('Write some notes first')
+      return
+    }
+    setSavingNote(true)
+    try {
+      await api.post('/notes', {
+        title: preview?.title || 'YouTube Lecture Notes',
+        content: `Source: ${url.trim()}\n\n${videoNotes.trim()}`,
+        tags: ['youtube', 'lecture'],
+      })
+      toast.success('Lecture notes saved to Notes library')
+    } catch {
+      toast.error('Failed to save lecture notes')
+    } finally {
+      setSavingNote(false)
+    }
+  }
+
   const tabs = [
     { id: 'summary' as YTTab, label: 'Summary', icon: Brain },
     { id: 'notes' as YTTab, label: 'Notes', icon: FileText },
@@ -70,26 +123,29 @@ export function YouTubeLearningPage() {
     <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-[#252525] tracking-tight">YouTube Learning</h1>
-        <p className="text-[#707070] text-sm mt-1">Extract summaries, transcripts, and quizzes from educational videos</p>
+        <p className="text-[#707070] text-sm mt-1">Watch lectures, take study notes, or generate AI summaries and quizzes</p>
       </div>
 
-      <div className="flex gap-2.5">
-        <Input id="yt-url" placeholder="Paste YouTube video URL..." value={url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)} onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && processVideo()} leftIcon={<Video className="w-4 h-4 text-[#707070]" />} className="flex-1" />
-        <Button onClick={() => processVideo()} isLoading={processing} leftIcon={<Brain className="w-4 h-4" />}>
-          {processing ? 'Processing...' : 'Analyze'}
+      <div className="flex flex-wrap gap-2.5">
+        <Input id="yt-url" placeholder="Paste YouTube video URL..." value={url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)} onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => e.key === 'Enter' && void loadVideoPreview()} leftIcon={<Video className="w-4 h-4 text-[#707070]" />} className="flex-1 min-w-60" />
+        <Button variant="secondary" onClick={() => void loadVideoPreview()} isLoading={loadingPreview} leftIcon={<Play className="w-4 h-4" />}>
+          Load Video
+        </Button>
+        <Button onClick={() => void processVideo()} isLoading={processing} leftIcon={<Brain className="w-4 h-4" />}>
+          {processing ? 'Processing...' : 'AI Study Guide'}
         </Button>
       </div>
 
-      {!analysis && !processing && (
+      {!preview && !analysis && !processing && (
         <button
           onClick={() => {
             const sample = 'https://www.youtube.com/watch?v=IHZwWFHWa-w'
             setUrl(sample)
-            processVideo(sample)
+            void loadVideoPreview(sample)
           }}
           className="text-xs text-[#5965B3] hover:underline font-medium"
         >
-          Try sample lecture video →
+          Load sample 3Blue1Brown lecture →
         </button>
       )}
 
@@ -97,6 +153,39 @@ export function YouTubeLearningPage() {
         <div className="p-4 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D] flex items-start gap-2.5">
           <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <span>{aiError}</span>
+        </div>
+      )}
+
+      {preview && (
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          <Card className="lg:col-span-3 p-4 bg-white border-[#E7E5E0] space-y-3">
+            <div className="aspect-video w-full rounded-lg overflow-hidden bg-black">
+              <iframe
+                src={`https://www.youtube.com/embed/${preview.videoId}`}
+                title={preview.title}
+                className="w-full h-full"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+            </div>
+            <div>
+              <h3 className="font-semibold text-sm text-[#252525]">{preview.title}</h3>
+              <p className="text-xs text-[#707070] mt-0.5">{preview.channel}</p>
+            </div>
+          </Card>
+
+          <Card className="lg:col-span-2 p-4 bg-white border-[#E7E5E0] flex flex-col space-y-3">
+            <CardHeader className="mb-0">
+              <CardTitle className="flex items-center gap-2"><BookOpen className="w-4 h-4 text-[#5965B3]" /> Lecture Notes</CardTitle>
+              <Button size="sm" isLoading={savingNote} onClick={() => void saveStudyNotes()}>Save to Notes</Button>
+            </CardHeader>
+            <textarea
+              value={videoNotes}
+              onChange={e => setVideoNotes(e.target.value)}
+              placeholder="Take Markdown notes while watching the lecture..."
+              className="input flex-1 min-h-56 text-xs font-mono resize-none"
+            />
+          </Card>
         </div>
       )}
 
@@ -120,7 +209,7 @@ export function YouTubeLearningPage() {
                 <div className="flex items-center gap-3 text-xs text-[#707070] mt-0.5">
                   {analysis.channel && <span>{analysis.channel}</span>}
                   {analysis.duration && <span className="flex items-center gap-1"><Clock className="w-3 h-3 text-[#999999]" /> {analysis.duration}</span>}
-                  <Badge variant="success">Processed</Badge>
+                  <Badge variant="success">AI Guide Ready</Badge>
                 </div>
               </div>
             </div>

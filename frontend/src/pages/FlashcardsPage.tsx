@@ -69,10 +69,15 @@ export function FlashcardsPage() {
   const [cardIndex, setCardIndex] = useState(0)
   const [isFlipped, setIsFlipped] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showAddCardModal, setShowAddCardModal] = useState(false)
   const [newDeckName, setNewDeckName] = useState('')
   const [newDeckSubject, setNewDeckSubject] = useState('')
+  const [manualFront, setManualFront] = useState('')
+  const [manualBack, setManualBack] = useState('')
+  const [draftCards, setDraftCards] = useState<Array<{ front: string; back: string }>>([])
   const [sourceText, setSourceText] = useState('')
   const [generatingCards, setGeneratingCards] = useState(false)
+  const [savingCard, setSavingCard] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const [sessionComplete, setSessionComplete] = useState(false)
   const [sessionStats, setSessionStats] = useState({ easy: 0, medium: 0, hard: 0 })
@@ -125,20 +130,16 @@ export function FlashcardsPage() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!activeDeck) return
+      if (!activeDeck || showAddCardModal || activeDeck.cards.length === 0) return
       if (e.key === ' ') { e.preventDefault(); handleFlip() }
       if (e.key === 'ArrowRight' && isFlipped) void handleDifficulty('easy')
       if (e.key === 'ArrowLeft' && isFlipped) void handleDifficulty('hard')
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [activeDeck, isFlipped, handleFlip, handleDifficulty])
+  }, [activeDeck, showAddCardModal, isFlipped, handleFlip, handleDifficulty])
 
   const startDeck = (deck: Deck) => {
-    if (deck.cards.length === 0) {
-      toast.error('This deck has no cards yet')
-      return
-    }
     setActiveDeck(deck)
     setCardIndex(0)
     setIsFlipped(false)
@@ -146,28 +147,92 @@ export function FlashcardsPage() {
     setSessionStats({ easy: 0, medium: 0, hard: 0 })
   }
 
-  const createDeck = async (cards: Array<{ front: string; back: string }> = []) => {
+  const addDraftCard = () => {
+    if (!manualFront.trim() || !manualBack.trim()) {
+      toast.error('Enter both front and back text')
+      return
+    }
+    setDraftCards(prev => [...prev, { front: manualFront.trim(), back: manualBack.trim() }])
+    setManualFront('')
+    setManualBack('')
+  }
+
+  const createDeck = async () => {
     if (!newDeckName.trim()) {
       toast.error('Please enter a deck name')
       return
     }
+    const pendingCard = manualFront.trim() && manualBack.trim()
+      ? [{ front: manualFront.trim(), back: manualBack.trim() }]
+      : []
+    const cardsToSave = [...draftCards, ...pendingCard]
+
     try {
       const res = await api.post('/flashcards/decks', {
         name: newDeckName.trim(),
         subject: newDeckSubject.trim() || 'General',
-        cards,
+        cards: cardsToSave,
       })
       const created = mapDeck(res.data.deck as RawDeck)
       setDecks(d => [created, ...d])
       setShowCreateModal(false)
       setNewDeckName('')
       setNewDeckSubject('')
+      setManualFront('')
+      setManualBack('')
+      setDraftCards([])
       setSourceText('')
-      toast.success(cards.length > 0 ? `Deck created with ${cards.length} AI flashcards` : 'Deck created')
-      if (created.cards.length > 0) startDeck(created)
+      toast.success(cardsToSave.length > 0 ? `Deck created with ${cardsToSave.length} flashcards` : 'Deck created')
+      startDeck(created)
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } }; message?: string }
       toast.error(err.response?.data?.error || err.message || 'Failed to create deck')
+    }
+  }
+
+  const addCardToActiveDeck = async () => {
+    if (!activeDeck || !manualFront.trim() || !manualBack.trim()) {
+      toast.error('Enter both question and answer')
+      return
+    }
+    setSavingCard(true)
+    try {
+      const res = await api.post(`/flashcards/decks/${activeDeck.id}/cards`, {
+        cards: [{ front: manualFront.trim(), back: manualBack.trim() }],
+      })
+      const inserted = ((res.data?.cards || []) as RawDeck['cards']).map(c => ({
+        ...c,
+        dueDate: new Date(c.dueDate),
+      }))
+      const updatedDeck = { ...activeDeck, cards: [...activeDeck.cards, ...inserted] }
+      setActiveDeck(updatedDeck)
+      setDecks(prev => prev.map(d => d.id === activeDeck.id ? updatedDeck : d))
+      setManualFront('')
+      setManualBack('')
+      setShowAddCardModal(false)
+      setSessionComplete(false)
+      toast.success('Flashcard added')
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(err.response?.data?.error || err.message || 'Failed to add flashcard')
+    } finally {
+      setSavingCard(false)
+    }
+  }
+
+  const deleteCurrentCard = async () => {
+    if (!activeDeck || !currentCard) return
+    try {
+      await api.delete(`/flashcards/cards/${currentCard.id}`)
+      const nextCards = activeDeck.cards.filter(c => c.id !== currentCard.id)
+      const updatedDeck = { ...activeDeck, cards: nextCards }
+      setActiveDeck(updatedDeck)
+      setDecks(prev => prev.map(d => d.id === activeDeck.id ? updatedDeck : d))
+      setCardIndex(i => Math.max(0, Math.min(i, nextCards.length - 1)))
+      setIsFlipped(false)
+      toast.success('Card removed')
+    } catch {
+      toast.error('Failed to delete card')
     }
   }
 
@@ -218,6 +283,7 @@ export function FlashcardsPage() {
       setNewDeckName('')
       setNewDeckSubject('')
       setSourceText('')
+      setDraftCards([])
       toast.success(`Generated ${deck.cards.length} flashcards!`)
       startDeck(deck)
     } catch (error: unknown) {
@@ -237,11 +303,16 @@ export function FlashcardsPage() {
           <button onClick={() => setActiveDeck(null)} className="btn-icon text-[#707070] hover:text-[#252525]">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <div className="flex-1">
-            <h1 className="text-xl font-bold text-[#252525]">{activeDeck.name}</h1>
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-bold text-[#252525] truncate">{activeDeck.name}</h1>
             <p className="text-xs text-[#707070]">{activeDeck.subject}</p>
           </div>
-          <span className="text-xs font-mono text-[#707070]">{cardIndex + 1} / {activeDeck.cards.length}</span>
+          <Button size="sm" variant="secondary" onClick={() => setShowAddCardModal(true)} leftIcon={<Plus className="w-3.5 h-3.5" />}>
+            Add card
+          </Button>
+          {activeDeck.cards.length > 0 && (
+            <span className="text-xs font-mono text-[#707070]">{cardIndex + 1} / {activeDeck.cards.length}</span>
+          )}
         </div>
 
         <div className="h-1.5 bg-[#F0F0ED] rounded-full overflow-hidden">
@@ -252,7 +323,14 @@ export function FlashcardsPage() {
           />
         </div>
 
-        {sessionComplete ? (
+        {activeDeck.cards.length === 0 ? (
+          <EmptyState
+            icon={Zap}
+            title="This deck has no cards yet"
+            description="Add your first flashcard to start reviewing with spaced repetition."
+            action={<Button onClick={() => setShowAddCardModal(true)} leftIcon={<Plus className="w-4 h-4" />}>Add first card</Button>}
+          />
+        ) : sessionComplete ? (
           <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} className="text-center py-10 bg-white border border-[#E7E5E0] rounded-xl p-6">
             <h2 className="text-2xl font-bold text-[#252525] mb-1">Session Complete</h2>
             <p className="text-xs text-[#707070] mb-6">You reviewed {activeDeck.cards.length} cards</p>
@@ -308,10 +386,37 @@ export function FlashcardsPage() {
               <div className="flex justify-center gap-3 pt-2">
                 <button onClick={() => cardIndex > 0 && (setCardIndex(i => i - 1), setIsFlipped(false))} className="btn btn-secondary btn-sm"><ChevronLeft className="w-4 h-4" /></button>
                 <button onClick={handleFlip} className="btn btn-primary gap-2"><RotateCcw className="w-4 h-4" /> Flip card</button>
+                <button onClick={() => void deleteCurrentCard()} className="btn btn-secondary btn-sm text-[#B45D5D]" title="Remove card"><Trash2 className="w-3.5 h-3.5" /></button>
               </div>
             )}
           </>
         ) : null}
+
+        <Modal open={showAddCardModal} onClose={() => setShowAddCardModal(false)} title="Add Flashcard" size="sm">
+          <div className="space-y-4">
+            <Input
+              id="add-front"
+              label="Front (Question / Term)"
+              placeholder="e.g. What is Newton's Second Law?"
+              value={manualFront}
+              onChange={e => setManualFront(e.target.value)}
+            />
+            <div>
+              <label className="input-label">Back (Answer / Definition)</label>
+              <textarea
+                value={manualBack}
+                onChange={e => setManualBack(e.target.value)}
+                placeholder="e.g. Force equals mass times acceleration (F = ma)."
+                rows={3}
+                className="input text-xs resize-none"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" className="flex-1" onClick={() => setShowAddCardModal(false)}>Cancel</Button>
+              <Button className="flex-1" isLoading={savingCard} onClick={() => void addCardToActiveDeck()}>Save card</Button>
+            </div>
+          </div>
+        </Modal>
       </div>
     )
   }
@@ -321,7 +426,7 @@ export function FlashcardsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Flashcards</h1>
-          <p className="text-[#707070] text-sm mt-1">Study materials using spaced repetition</p>
+          <p className="text-[#707070] text-sm mt-1">Create study decks and review with spaced repetition</p>
         </div>
         <Button onClick={() => setShowCreateModal(true)} leftIcon={<Plus className="w-4 h-4" />}>New deck</Button>
       </div>
@@ -331,7 +436,7 @@ export function FlashcardsPage() {
       ) : loadError ? (
         <div className="p-4 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D]">{loadError}</div>
       ) : decks.length === 0 ? (
-        <EmptyState icon={Zap} title="No flashcard decks yet" description="Create a deck or generate AI flashcards to start reviewing." action={<Button onClick={() => setShowCreateModal(true)} leftIcon={<Plus className="w-4 h-4" />}>Create deck</Button>} />
+        <EmptyState icon={Zap} title="No flashcard decks yet" description="Create a deck with manual cards or generate AI flashcards to start reviewing." action={<Button onClick={() => setShowCreateModal(true)} leftIcon={<Plus className="w-4 h-4" />}>Create deck</Button>} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {decks.map((deck) => {
@@ -384,6 +489,42 @@ export function FlashcardsPage() {
         <div className="space-y-4">
           <Input id="deck-name" label="Deck name / topic" placeholder="e.g. Calculus Fundamentals" value={newDeckName} onChange={e => setNewDeckName(e.target.value)} />
           <Input id="deck-subject" label="Subject" placeholder="e.g. Mathematics" value={newDeckSubject} onChange={e => setNewDeckSubject(e.target.value)} />
+
+          {/* Manual card builder */}
+          <div className="p-4 rounded-xl bg-white border border-[#E7E5E0] space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-[#252525]">Add Cards Manually</span>
+              <Badge variant="neutral">{draftCards.length} ready</Badge>
+            </div>
+            <input
+              value={manualFront}
+              onChange={e => setManualFront(e.target.value)}
+              placeholder="Front (Question or term)..."
+              className="input text-xs py-1.5"
+            />
+            <input
+              value={manualBack}
+              onChange={e => setManualBack(e.target.value)}
+              placeholder="Back (Answer or definition)..."
+              className="input text-xs py-1.5"
+            />
+            <Button type="button" variant="secondary" size="sm" onClick={addDraftCard} leftIcon={<Plus className="w-3.5 h-3.5" />}>
+              Add card to list
+            </Button>
+            {draftCards.length > 0 && (
+              <div className="max-h-28 overflow-y-auto space-y-1 pt-1">
+                {draftCards.map((c, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-[11px] bg-[#FAF9F6] px-2.5 py-1.5 rounded border border-[#E7E5E0]">
+                    <span className="truncate font-medium text-[#252525]">{c.front}</span>
+                    <button onClick={() => setDraftCards(prev => prev.filter((_, i) => i !== idx))} className="text-[#999999] hover:text-[#B45D5D] ml-2">
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="p-4 rounded-xl bg-[#FAF9F6] border border-[#E7E5E0] space-y-2.5">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-[#5965B3]" />
@@ -394,7 +535,7 @@ export function FlashcardsPage() {
               value={sourceText}
               onChange={e => setSourceText(e.target.value)}
               placeholder="Optional: paste notes, definitions, or key concepts..."
-              rows={3}
+              rows={2}
               className="input text-xs resize-none"
             />
             {aiError && (
@@ -416,7 +557,9 @@ export function FlashcardsPage() {
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" className="flex-1" onClick={() => { setShowCreateModal(false); setAiError(null) }}>Cancel</Button>
-            <Button className="flex-1" onClick={() => void createDeck()}>Create empty deck</Button>
+            <Button className="flex-1" onClick={() => void createDeck()}>
+              {draftCards.length > 0 || (manualFront.trim() && manualBack.trim()) ? 'Create deck with cards' : 'Create deck'}
+            </Button>
           </div>
         </div>
       </Modal>
