@@ -1,15 +1,25 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Sparkles, Download, ZoomIn, ZoomOut, AlertCircle, Plus, Trash2, BookOpen } from 'lucide-react'
+import { Sparkles, Download, ZoomIn, ZoomOut, AlertCircle, Plus, Trash2, BookOpen, Save, FolderOpen, GitBranch } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Card } from '@/components/ui/Card'
+import { MermaidDiagram } from '@/components/common/MermaidDiagram'
 import { toast } from 'react-hot-toast'
+import { cn } from '@/lib/utils'
 import api from '@/lib/api'
 
 interface Branch {
   title: string
   children: string[]
+}
+
+interface SavedMindMap {
+  id: number
+  title: string
+  root: string
+  branches: Branch[]
+  updatedAt: string
 }
 
 const DEFAULT_BRANCHES: Branch[] = [
@@ -19,16 +29,53 @@ const DEFAULT_BRANCHES: Branch[] = [
   { title: 'Deep Learning', children: ['Neural Networks', 'CNN', 'RNN', 'Transformers'] },
 ]
 
+function sanitizeMermaidLabel(input: string): string {
+  return input.replace(/["`()[\]{}<>]/g, ' ').replace(/\s+/g, ' ').trim() || 'Node'
+}
+
 export function MindMapPage() {
   const [topic, setTopic] = useState('Machine Learning')
   const [generating, setGenerating] = useState(false)
   const [savingNote, setSavingNote] = useState(false)
+  const [savingMap, setSavingMap] = useState(false)
+  const [loadingMaps, setLoadingMaps] = useState(true)
+  const [savedMaps, setSavedMaps] = useState<SavedMindMap[]>([])
+  const [activeMapId, setActiveMapId] = useState<number | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [root, setRoot] = useState('Machine Learning')
   const [branches, setBranches] = useState<Branch[]>(DEFAULT_BRANCHES)
   const [zoom, setZoom] = useState(1)
   const [newBranchTitle, setNewBranchTitle] = useState('')
   const [childDrafts, setChildDrafts] = useState<Record<number, string>>({})
+  const [viewMode, setViewMode] = useState<'canvas' | 'mermaid'>('canvas')
+
+  const loadSavedMaps = useCallback(async () => {
+    try {
+      setLoadingMaps(true)
+      const res = await api.get('/mindmaps')
+      const list = (res.data?.mindMaps || []) as SavedMindMap[]
+      setSavedMaps(list)
+    } catch {
+      toast.error('Failed to load saved mind maps')
+    } finally {
+      setLoadingMaps(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadSavedMaps()
+  }, [loadSavedMaps])
+
+  const mermaidSyntax = useMemo(() => {
+    const lines = ['mindmap', `  root((${sanitizeMermaidLabel(root)}))`]
+    branches.forEach((b) => {
+      lines.push(`    ${sanitizeMermaidLabel(b.title)}`)
+      b.children.forEach((c) => {
+        lines.push(`      ${sanitizeMermaidLabel(c)}`)
+      })
+    })
+    return lines.join('\n')
+  }, [root, branches])
 
   const generate = async () => {
     if (!topic.trim()) return
@@ -43,6 +90,7 @@ export function MindMapPage() {
         toast.error(msg)
         return
       }
+      setActiveMapId(null)
       setRoot(data.root || topic.trim())
       setBranches(data.branches)
       toast.success('Mind map generated!')
@@ -54,6 +102,55 @@ export function MindMapPage() {
     } finally {
       setGenerating(false)
     }
+  }
+
+  const saveMindMap = async () => {
+    if (!root.trim()) return
+    setSavingMap(true)
+    try {
+      if (activeMapId) {
+        const res = await api.patch(`/mindmaps/${activeMapId}`, {
+          title: root.trim(),
+          root: root.trim(),
+          branches,
+        })
+        const updated = res.data.mindMap as SavedMindMap
+        setSavedMaps((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
+        toast.success('Mind map updated')
+      } else {
+        const res = await api.post('/mindmaps', {
+          title: root.trim(),
+          root: root.trim(),
+          branches,
+        })
+        const created = res.data.mindMap as SavedMindMap
+        setSavedMaps((prev) => [created, ...prev])
+        setActiveMapId(created.id)
+        toast.success('Mind map saved (+10 XP)')
+      }
+    } catch {
+      toast.error('Failed to save mind map')
+    } finally {
+      setSavingMap(false)
+    }
+  }
+
+  const deleteSavedMap = async (id: number) => {
+    try {
+      await api.delete(`/mindmaps/${id}`)
+      setSavedMaps((prev) => prev.filter((m) => m.id !== id))
+      if (activeMapId === id) setActiveMapId(null)
+      toast.success('Mind map deleted')
+    } catch {
+      toast.error('Failed to delete mind map')
+    }
+  }
+
+  const selectSavedMap = (m: SavedMindMap) => {
+    setActiveMapId(m.id)
+    setRoot(m.root)
+    setTopic(m.root)
+    setBranches(Array.isArray(m.branches) ? m.branches : [])
   }
 
   const applyRootTopic = () => {
@@ -130,13 +227,24 @@ export function MindMapPage() {
   }
 
   return (
-    <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 md:p-8 max-w-5xl mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Mind Maps</h1>
-          <p className="text-[#707070] text-sm mt-1">Build, edit, or AI-generate structured visual concept maps</p>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Mind Maps</h1>
+          <p className="text-text-secondary text-sm mt-1">Build, save, or AI-generate structured visual concept maps</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setViewMode(v => v === 'canvas' ? 'mermaid' : 'canvas')}
+            leftIcon={<GitBranch className="w-3.5 h-3.5" />}
+          >
+            {viewMode === 'canvas' ? 'Mermaid View' : 'Editor View'}
+          </Button>
+          <Button size="sm" isLoading={savingMap} onClick={() => void saveMindMap()} leftIcon={<Save className="w-3.5 h-3.5" />}>
+            {activeMapId ? 'Update Saved' : 'Save Map'}
+          </Button>
           <Button variant="secondary" size="sm" isLoading={savingNote} onClick={() => void saveToNotes()} leftIcon={<BookOpen className="w-3.5 h-3.5" />}>
             Save to Notes
           </Button>
@@ -145,6 +253,40 @@ export function MindMapPage() {
           </Button>
         </div>
       </div>
+
+      {!loadingMaps && savedMaps.length > 0 && (
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+          <span className="text-[11px] font-medium text-text-secondary flex items-center gap-1 flex-shrink-0">
+            <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" /> Saved:
+          </span>
+          {savedMaps.map((m) => (
+            <div
+              key={m.id}
+              className={cn(
+                'flex items-center gap-1.5 pl-3 pr-1.5 py-1 rounded-lg border text-xs flex-shrink-0 cursor-pointer transition-all',
+                activeMapId === m.id
+                  ? 'bg-accent-light border-accent text-accent-text font-medium'
+                  : 'bg-surface border-border text-text-secondary hover:text-text-primary'
+              )}
+              onClick={() => selectSavedMap(m)}
+            >
+              <span className="truncate max-w-36">{m.title}</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void deleteSavedMap(m.id)
+                }}
+                aria-label={`Delete saved map ${m.title}`}
+                className="p-0.5 rounded hover:bg-error-light text-text-muted hover:text-error"
+                title="Delete saved map"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2.5">
         <Input
@@ -156,7 +298,7 @@ export function MindMapPage() {
           className="flex-1 min-w-52"
         />
         <Button variant="secondary" onClick={applyRootTopic}>Set Topic</Button>
-        <Button onClick={generate} isLoading={generating} leftIcon={<Sparkles className="w-4 h-4" />}>AI Generate</Button>
+        <Button onClick={() => void generate()} isLoading={generating} leftIcon={<Sparkles className="w-4 h-4" />}>AI Generate</Button>
       </div>
 
       <div className="flex gap-2.5 items-center">
@@ -172,37 +314,42 @@ export function MindMapPage() {
       </div>
 
       {aiError && (
-        <div className="p-3.5 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D] flex items-start gap-2.5">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+        <div role="alert" className="p-3.5 rounded-xl bg-error-light border border-error/30 text-xs text-error flex items-start gap-2.5">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" aria-hidden="true" />
           <span>{aiError}</span>
         </div>
       )}
 
-      {root ? (
-        <Card className="p-8 min-h-[460px] flex items-center justify-center relative overflow-auto bg-white border-[#E7E5E0] shadow-xs">
-          <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, #707070 1px, transparent 0)', backgroundSize: '24px 24px' }}></div>
+      {viewMode === 'mermaid' ? (
+        <Card className="p-6">
+          <MermaidDiagram chart={mermaidSyntax} className="min-h-[380px] flex items-center justify-center overflow-x-auto" />
+        </Card>
+      ) : root ? (
+        <Card className="p-6 sm:p-8 min-h-[460px] flex items-center justify-center relative overflow-auto">
+          <div className="absolute inset-0 opacity-15 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, var(--color-text-muted) 1px, transparent 0)', backgroundSize: '24px 24px' }} />
           <div className="relative z-10 flex flex-col items-center w-full" style={{ transform: `scale(${zoom})`, transformOrigin: 'top center', transition: 'transform 0.2s' }}>
             <motion.div key={root} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="px-6 py-2.5 bg-[#5965B3] text-white font-bold rounded-xl shadow-xs mb-10 text-base relative z-20">
               {root}
             </motion.div>
             <div className="flex flex-wrap justify-center gap-6">
               {branches.map((b, i) => (
-                <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="flex flex-col items-center w-48 bg-[#FAF9F6]/90 border border-[#E7E5E0] rounded-xl p-3">
+                <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className="flex flex-col items-center w-48 bg-surface-subtle/90 border border-border rounded-xl p-3">
                   <div className="flex items-center gap-1 w-full mb-3">
                     <input
                       value={b.title}
+                      aria-label={`Branch ${i + 1} title`}
                       onChange={e => renameBranch(i, e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 bg-[#ECEEF7] border border-[#5965B3]/20 rounded-lg text-xs font-semibold text-[#5965B3] outline-none text-center"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 bg-accent-light border border-accent/25 rounded-lg text-xs font-semibold text-accent-text outline-none text-center"
                     />
-                    <button onClick={() => removeBranch(i)} className="p-1 text-[#999999] hover:text-[#B45D5D]" title="Remove branch">
+                    <button type="button" onClick={() => removeBranch(i)} aria-label={`Remove branch ${b.title}`} className="p-1 text-text-muted hover:text-error" title="Remove branch">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                   <div className="space-y-1.5 w-full mb-2">
                     {b.children.map((c, ci) => (
-                      <div key={ci} className="group flex items-center justify-between gap-1 px-2.5 py-1.5 bg-white border border-[#E7E5E0] rounded-md text-[11px] text-[#252525] shadow-2xs">
+                      <div key={ci} className="group flex items-center justify-between gap-1 px-2.5 py-1.5 bg-surface border border-border rounded-md text-[11px] text-text-primary shadow-2xs">
                         <span className="truncate flex-1">{c}</span>
-                        <button onClick={() => removeChild(i, ci)} className="text-[#999999] hover:text-[#B45D5D] opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button type="button" onClick={() => removeChild(i, ci)} aria-label={`Remove subtopic ${c}`} className="text-text-muted hover:text-error opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">
                           ×
                         </button>
                       </div>
@@ -214,9 +361,10 @@ export function MindMapPage() {
                       onChange={e => setChildDrafts(prev => ({ ...prev, [i]: e.target.value }))}
                       onKeyDown={e => e.key === 'Enter' && addChild(i)}
                       placeholder="+ Subtopic"
-                      className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-white border border-[#E7E5E0] rounded outline-none focus:border-[#5965B3]"
+                      aria-label={`Add subtopic to ${b.title}`}
+                      className="flex-1 min-w-0 px-2 py-1 text-[11px] bg-surface border border-border rounded text-text-primary placeholder:text-text-muted outline-none focus:border-accent"
                     />
-                    <button onClick={() => addChild(i)} className="px-2 py-1 bg-[#ECEEF7] text-[#5965B3] rounded text-[11px] font-semibold hover:bg-[#5965B3] hover:text-white transition-colors">
+                    <button type="button" onClick={() => addChild(i)} aria-label={`Add subtopic to ${b.title}`} className="px-2 py-1 bg-accent-light text-accent-text rounded text-[11px] font-semibold hover:bg-[#5965B3] hover:text-white transition-colors">
                       +
                     </button>
                   </div>
@@ -225,8 +373,8 @@ export function MindMapPage() {
             </div>
           </div>
           <div className="absolute bottom-4 right-4 flex gap-1 z-20">
-            <button onClick={() => setZoom(z => Math.max(0.6, z - 0.1))} className="btn btn-secondary btn-icon-sm rounded-md"><ZoomOut className="w-3.5 h-3.5" /></button>
-            <button onClick={() => setZoom(z => Math.min(1.4, z + 0.1))} className="btn btn-secondary btn-icon-sm rounded-md"><ZoomIn className="w-3.5 h-3.5" /></button>
+            <button type="button" onClick={() => setZoom(z => Math.max(0.6, z - 0.1))} aria-label="Zoom out mind map" className="btn btn-secondary btn-icon-sm rounded-md"><ZoomOut className="w-3.5 h-3.5" /></button>
+            <button type="button" onClick={() => setZoom(z => Math.min(1.4, z + 0.1))} aria-label="Zoom in mind map" className="btn btn-secondary btn-icon-sm rounded-md"><ZoomIn className="w-3.5 h-3.5" /></button>
           </div>
         </Card>
       ) : null}

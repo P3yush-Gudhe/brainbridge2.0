@@ -5,25 +5,18 @@ import { createRequire } from 'node:module'
 import express from 'express'
 import type { Request, Response } from 'express'
 
-import { aiRouter } from './server/aiRoutes.ts'
-import { dbRouter } from './server/dbRoutes.ts'
-import { requireAuth } from './src/middleware/auth.ts'
+import { closePool } from './src/db/index.ts'
+import { centralErrorHandler, createApiApp } from './server/app.ts'
+import { validateGeminiConfig } from './server/gemini.ts'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 async function startServer() {
-  const app = express()
+  const app = createApiApp({ attachErrorHandler: false })
   const port = Number(process.env.PORT) || 3000
 
-  app.use(express.json({ limit: '25mb' }))
-
-  app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok' })
-  })
-
-  app.use('/api/ai', requireAuth, aiRouter)
-  app.use('/api', dbRouter)
+  void validateGeminiConfig()
 
   const isProd = process.env.NODE_ENV === 'production'
   if (!isProd) {
@@ -45,9 +38,38 @@ async function startServer() {
     })
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  app.use(centralErrorHandler)
+
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(`StudyMate server listening on http://0.0.0.0:${port}`)
   })
+
+  let shuttingDown = false
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return
+    shuttingDown = true
+    console.log(`\nReceived ${signal}. Shutting down gracefully...`)
+
+    const forceTimer = setTimeout(() => {
+      console.error('Forced shutdown after timeout')
+      process.exit(1)
+    }, 10_000)
+    forceTimer.unref()
+
+    server.close(async () => {
+      try {
+        await closePool()
+        console.log('Database pool closed cleanly. Goodbye.')
+        process.exit(0)
+      } catch (err) {
+        console.error('Error closing database pool:', err)
+        process.exit(1)
+      }
+    })
+  }
+
+  process.on('SIGTERM', () => void shutdown('SIGTERM'))
+  process.on('SIGINT', () => void shutdown('SIGINT'))
 }
 
 startServer().catch((err) => {

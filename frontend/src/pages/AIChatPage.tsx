@@ -104,7 +104,7 @@ export function AIChatPage() {
   const [editTitle, setEditTitle] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window !== 'undefined' ? window.innerWidth >= 768 : true)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -165,6 +165,7 @@ export function AIChatPage() {
           setActiveConvId(fresh.id)
         }
       } catch {
+        toast.error('Failed to load conversations')
         setActiveConvId(prev => prev || conversations[0]?.id || '')
       }
     })()
@@ -197,7 +198,12 @@ export function AIChatPage() {
   const deleteConversation = async (id: string) => {
     const target = conversations.find(c => c.id === id)
     if (target?.dbId) {
-      await api.delete(`/chats/${target.dbId}`).catch(() => {})
+      try {
+        await api.delete(`/chats/${target.dbId}`)
+      } catch {
+        toast.error('Failed to delete conversation')
+        return
+      }
     }
     const remaining = conversations.filter(c => c.id !== id)
     if (remaining.length > 0) {
@@ -218,7 +224,9 @@ export function AIChatPage() {
     setConversations(prev => prev.map(c => c.id === id ? { ...c, title: nextTitle } : c))
     setEditingTitle(null)
     if (target?.dbId) {
-      await api.patch(`/chats/${target.dbId}`, { title: nextTitle }).catch(() => {})
+      await api.patch(`/chats/${target.dbId}`, { title: nextTitle }).catch(() => {
+        toast.error('Failed to rename conversation')
+      })
     }
   }
 
@@ -364,7 +372,7 @@ export function AIChatPage() {
   }
 
   const copyMessage = (content: string, id: string) => {
-    navigator.clipboard.writeText(content)
+    void navigator.clipboard.writeText(content)
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 2000)
     toast.success('Copied to clipboard')
@@ -402,7 +410,9 @@ export function AIChatPage() {
       messages: c.messages.map(m => m.id === msgId ? { ...m, liked: nextLiked } : m),
     } : c))
     if (dbId) {
-      void api.patch(`/chats/messages/${dbId}/like`, { liked: nextLiked }).catch(() => {})
+      void api.patch(`/chats/messages/${dbId}/like`, { liked: nextLiked }).catch(() => {
+        toast.error('Failed to save feedback')
+      })
     }
   }
 
@@ -420,7 +430,7 @@ export function AIChatPage() {
   }
 
   return (
-    <div className="flex h-full bg-[#F7F7F5]">
+    <div className="flex h-full bg-bg relative">
       <AnimatePresence>
         {sidebarOpen && (
           <motion.div
@@ -428,21 +438,22 @@ export function AIChatPage() {
             animate={{ width: 260, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="flex-shrink-0 border-r border-[#E7E5E0] bg-white flex flex-col overflow-hidden"
+            className="flex-shrink-0 border-r border-border bg-surface flex flex-col overflow-hidden"
           >
-            <div className="p-3 border-b border-[#E7E5E0]">
-              <button onClick={createConversation} className="btn btn-primary w-full gap-2 text-xs font-medium">
-                <Plus className="w-3.5 h-3.5" /> New conversation
+            <div className="p-3 border-b border-border">
+              <button type="button" onClick={createConversation} className="btn btn-primary w-full gap-2 text-xs font-medium">
+                <Plus className="w-3.5 h-3.5" aria-hidden="true" /> New conversation
               </button>
             </div>
             <div className="p-3">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#999999]" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
                 <input
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search conversations..."
-                  className="input pl-9 py-1.5 text-xs bg-[#F7F7F5]"
+                  aria-label="Search conversations"
+                  className="input pl-9 py-1.5 text-xs bg-bg"
                 />
               </div>
             </div>
@@ -452,11 +463,11 @@ export function AIChatPage() {
                   key={conv.id}
                   className={cn(
                     'group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all text-xs',
-                    activeConv?.id === conv.id ? 'bg-[#ECEEF7] text-[#5965B3] font-medium' : 'text-[#707070] hover:bg-[#F0F0ED] hover:text-[#252525]'
+                    activeConv?.id === conv.id ? 'bg-accent-light text-accent-text font-medium' : 'text-text-secondary hover:bg-surface-secondary hover:text-text-primary'
                   )}
                   onClick={() => setActiveConvId(conv.id)}
                 >
-                  <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" />
+                  <MessageSquare className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
                   {editingTitle === conv.id ? (
                     <input
                       autoFocus
@@ -464,7 +475,7 @@ export function AIChatPage() {
                       onChange={e => setEditTitle(e.target.value)}
                       onBlur={() => void saveTitle(conv.id)}
                       onKeyDown={e => e.key === 'Enter' && void saveTitle(conv.id)}
-                      className="flex-1 bg-transparent text-xs text-[#252525] outline-none"
+                      className="flex-1 bg-transparent text-xs text-text-primary outline-none"
                       onClick={e => e.stopPropagation()}
                     />
                   ) : (
@@ -472,14 +483,18 @@ export function AIChatPage() {
                   )}
                   <div className="hidden group-hover:flex items-center gap-1">
                     <button
+                      type="button"
                       onClick={e => { e.stopPropagation(); setEditingTitle(conv.id); setEditTitle(conv.title) }}
-                      className="p-1 rounded hover:bg-white text-[#999999] hover:text-[#252525]"
+                      aria-label={`Rename conversation ${conv.title}`}
+                      className="p-1 rounded hover:bg-surface text-text-muted hover:text-text-primary"
                     >
                       <Edit3 className="w-3 h-3" />
                     </button>
                     <button
+                      type="button"
                       onClick={e => { e.stopPropagation(); void deleteConversation(conv.id) }}
-                      className="p-1 rounded hover:bg-[#FBEFEF] text-[#999999] hover:text-[#B45D5D]"
+                      aria-label={`Delete conversation ${conv.title}`}
+                      className="p-1 rounded hover:bg-error-light text-text-muted hover:text-error"
                     >
                       <Trash2 className="w-3 h-3" />
                     </button>
@@ -492,12 +507,23 @@ export function AIChatPage() {
       </AnimatePresence>
 
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="h-12 border-b border-[#E7E5E0] bg-white flex items-center px-4 gap-3 flex-shrink-0">
-          <button onClick={() => setSidebarOpen(!sidebarOpen)} className="btn-icon text-[#707070] hover:text-[#252525]">
+        <div className="h-12 border-b border-border bg-surface flex items-center px-4 gap-3 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label={sidebarOpen ? 'Hide conversation sidebar' : 'Show conversation sidebar'}
+            className="btn-icon text-text-secondary hover:text-text-primary"
+          >
             <ChevronRight className={cn('w-4 h-4 transition-transform', sidebarOpen && 'rotate-180')} />
           </button>
-          <span className="font-semibold text-[#252525] text-sm flex-1 truncate">{activeConv?.title}</span>
-          <button onClick={exportConversation} className="btn-icon text-[#707070] hover:text-[#252525]" title="Export conversation">
+          <span className="font-semibold text-text-primary text-sm flex-1 truncate">{activeConv?.title}</span>
+          <button
+            type="button"
+            onClick={exportConversation}
+            aria-label="Export conversation"
+            className="btn-icon text-text-secondary hover:text-text-primary"
+            title="Export conversation"
+          >
             <Download className="w-4 h-4" />
           </button>
         </div>
@@ -507,21 +533,22 @@ export function AIChatPage() {
             <div className="max-w-2xl mx-auto py-6">
               <div className="text-center mb-8">
                 <div className="w-10 h-10 rounded-xl bg-[#5965B3] text-white flex items-center justify-center mx-auto mb-3 shadow-xs">
-                  <Bot className="w-5 h-5" />
+                  <Bot className="w-5 h-5" aria-hidden="true" />
                 </div>
-                <h2 className="text-lg font-bold text-[#252525] mb-1">What would you like to learn?</h2>
-                <p className="text-[#707070] text-xs">Ask a question or select a topic to begin studying</p>
+                <h2 className="text-lg font-bold text-text-primary mb-1">What would you like to learn?</h2>
+                <p className="text-text-secondary text-xs">Ask a question or select a topic to begin studying</p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {SUGGESTED_PROMPTS.map((p) => (
                   <button
+                    type="button"
                     key={p.prompt}
                     onClick={() => { setInput(p.prompt); textareaRef.current?.focus() }}
-                    className="text-left p-4 rounded-xl border border-[#E7E5E0] bg-white hover:border-[#D4D2CD] hover:shadow-xs transition-all"
+                    className="text-left p-4 rounded-xl border border-border bg-surface hover:border-border-strong hover:shadow-xs transition-all"
                   >
-                    <span className="text-lg mb-1.5 block">{p.icon}</span>
-                    <div className="text-xs font-semibold text-[#252525] mb-0.5">{p.title}</div>
-                    <div className="text-xs text-[#707070] line-clamp-2">{p.prompt}</div>
+                    <span className="text-lg mb-1.5 block" aria-hidden="true">{p.icon}</span>
+                    <div className="text-xs font-semibold text-text-primary mb-0.5">{p.title}</div>
+                    <div className="text-xs text-text-secondary line-clamp-2">{p.prompt}</div>
                   </button>
                 ))}
               </div>
@@ -540,15 +567,15 @@ export function AIChatPage() {
                 'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-xs font-semibold',
                 message.role === 'user'
                   ? 'bg-[#5965B3] text-white'
-                  : 'bg-white border border-[#E7E5E0] text-[#5965B3]'
+                  : 'bg-surface border border-border text-accent-text'
               )}>
-                {message.role === 'user' ? <User className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
+                {message.role === 'user' ? <User className="w-3.5 h-3.5" aria-hidden="true" /> : <Bot className="w-3.5 h-3.5" aria-hidden="true" />}
               </div>
               <div className={cn(
                 'group relative rounded-xl px-4 py-3 max-w-full text-sm leading-relaxed',
                 message.role === 'user'
-                  ? 'bg-[#ECEEF7] text-[#252525]'
-                  : 'bg-white border border-[#E7E5E0] text-[#252525] shadow-xs'
+                  ? 'bg-accent-light text-text-primary'
+                  : 'bg-surface border border-border text-text-primary shadow-xs'
               )}>
                 {message.role === 'assistant' ? (
                   <div className="prose-studymate">
@@ -561,7 +588,7 @@ export function AIChatPage() {
                     {message.content === '' && (
                       <div className="flex gap-1 py-1">
                         {[0,1,2].map(i => (
-                          <motion.div key={i} className="w-1.5 h-1.5 rounded-full bg-[#5965B3]"
+                          <motion.div key={i} className="w-1.5 h-1.5 rounded-full bg-accent"
                             animate={{ y: [0, -4, 0] }}
                             transition={{ duration: 0.6, delay: i * 0.15, repeat: Infinity }}
                           />
@@ -574,22 +601,24 @@ export function AIChatPage() {
                 )}
 
                 <div className={cn(
-                  'absolute -bottom-7 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity',
+                  'absolute -bottom-7 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity',
                   message.role === 'user' ? 'right-0' : 'left-0'
                 )}>
                   <button
+                    type="button"
                     onClick={() => copyMessage(message.content, message.id)}
-                    className="p-1 rounded hover:bg-[#F0F0ED] text-[#999999] hover:text-[#252525] transition-colors"
+                    aria-label="Copy message"
+                    className="p-1 rounded hover:bg-surface-secondary text-text-muted hover:text-text-primary transition-colors"
                     title="Copy text"
                   >
-                    {copiedId === message.id ? <Check className="w-3 h-3 text-[#5C8A6A]" /> : <Copy className="w-3 h-3" />}
+                    {copiedId === message.id ? <Check className="w-3 h-3 text-success" /> : <Copy className="w-3 h-3" />}
                   </button>
                   {message.role === 'assistant' && (
                     <>
-                      <button onClick={() => likeMessage(message.id, true, message.dbId)} className={cn('p-1 rounded hover:bg-[#F0F0ED] transition-colors', message.liked === true ? 'text-[#5C8A6A]' : 'text-[#999999] hover:text-[#252525]')}>
+                      <button type="button" onClick={() => likeMessage(message.id, true, message.dbId)} aria-label="Thumbs up" className={cn('p-1 rounded hover:bg-surface-secondary transition-colors', message.liked === true ? 'text-success' : 'text-text-muted hover:text-text-primary')}>
                         <ThumbsUp className="w-3 h-3" />
                       </button>
-                      <button onClick={() => likeMessage(message.id, false, message.dbId)} className={cn('p-1 rounded hover:bg-[#F0F0ED] transition-colors', message.liked === false ? 'text-[#B45D5D]' : 'text-[#999999] hover:text-[#252525]')}>
+                      <button type="button" onClick={() => likeMessage(message.id, false, message.dbId)} aria-label="Thumbs down" className={cn('p-1 rounded hover:bg-surface-secondary transition-colors', message.liked === false ? 'text-error' : 'text-text-muted hover:text-text-primary')}>
                         <ThumbsDown className="w-3 h-3" />
                       </button>
                     </>
@@ -602,13 +631,15 @@ export function AIChatPage() {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="border-t border-[#E7E5E0] bg-white p-4">
+        <div className="border-t border-border bg-surface p-3 sm:p-4">
           <div className="max-w-4xl mx-auto">
-            <div className="relative flex items-end gap-2 bg-[#F7F7F5] border border-[#E7E5E0] rounded-xl p-2.5 focus-within:border-[#5965B3] transition-colors">
+            <div className="relative flex items-end gap-2 bg-bg border border-border rounded-xl p-2.5 focus-within:border-accent transition-colors">
               <button
+                type="button"
                 id="voice-input-btn"
                 onClick={toggleVoice}
-                className={cn('btn-icon flex-shrink-0 mb-0.5', isListening ? 'text-[#B45D5D] bg-[#FBEFEF]' : 'text-[#707070] hover:text-[#252525]')}
+                aria-label={isListening ? 'Stop voice dictation' : 'Start voice dictation'}
+                className={cn('btn-icon flex-shrink-0 mb-0.5', isListening ? 'text-error bg-error-light' : 'text-text-secondary hover:text-text-primary')}
                 title="Voice input"
               >
                 {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
@@ -616,28 +647,31 @@ export function AIChatPage() {
               <textarea
                 ref={textareaRef}
                 id="chat-input"
+                aria-label="Ask your study assistant"
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask a question..."
                 rows={1}
-                className="flex-1 bg-transparent text-[#252525] placeholder-[#999999] text-sm resize-none outline-none max-h-40 leading-relaxed"
+                className="flex-1 bg-transparent text-text-primary placeholder:text-text-muted text-sm resize-none outline-none max-h-40 leading-relaxed"
               />
               <button
+                type="button"
                 id="send-btn"
                 onClick={() => void sendMessage()}
                 disabled={!input.trim() || isLoading}
+                aria-label="Send message"
                 className={cn(
                   'btn-icon flex-shrink-0 mb-0.5 transition-all',
                   input.trim() && !isLoading
-                    ? 'bg-[#5965B3] hover:bg-[#4E59A3] text-white shadow-xs'
-                    : 'text-[#999999] cursor-not-allowed'
+                    ? 'bg-[#5965B3] hover:bg-[#4B56A1] text-white shadow-xs'
+                    : 'text-text-muted cursor-not-allowed'
                 )}
               >
                 <Send className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-[11px] text-[#999999] text-center mt-2">StudyMate is designed to assist your learning journey.</p>
+            <p className="text-[11px] text-text-muted text-center mt-2">StudyMate is designed to assist your learning journey.</p>
           </div>
         </div>
       </div>

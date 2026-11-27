@@ -26,4 +26,12 @@ export const createPool = () => {
 
 const pool = createPool()
 
+export async function closePool(): Promise<void> {
+  if (global._postgresPool) {
+    const active = global._postgresPool
+    global._postgresPool = undefined
+    await active.end()
+  }
+}
+
 export const db = drizzle(pool, { schema })

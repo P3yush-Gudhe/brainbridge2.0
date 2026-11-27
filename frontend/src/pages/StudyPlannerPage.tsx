@@ -1,13 +1,19 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Plus, Calendar, ChevronLeft, ChevronRight, Sparkles, CheckCircle2, Circle, Target, Brain, Trash2, AlertCircle } from 'lucide-react'
+import {
+  Plus, Calendar, ChevronLeft, ChevronRight, Sparkles, CheckCircle2,
+  Circle, Target, Brain, Trash2, AlertCircle, Download, GripVertical
+} from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Card, CardHeader, CardTitle } from '@/components/ui/Card'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { SkeletonList } from '@/components/ui/Skeleton'
 import { toast } from 'react-hot-toast'
 import { cn, formatDate } from '@/lib/utils'
+import { buildStudyCalendarIcs } from '@/lib/ics'
 import api from '@/lib/api'
 
 interface Exam {
@@ -42,13 +48,15 @@ export function StudyPlannerPage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [weekDate, setWeekDate] = useState(() => new Date())
+  const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null)
+  const [dragOverDayIdx, setDragOverDayIdx] = useState<number | null>(null)
   const [showExamModal, setShowExamModal] = useState(false)
   const [showTaskModal, setShowTaskModal] = useState(false)
   const [newExam, setNewExam] = useState({ subject: '', date: '', hours: '' })
   const [newTask, setNewTask] = useState({ subject: '', topic: '', date: '', duration: '60' })
   const [generatingPlan, setGeneratingPlan] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
-  const [recommendation, setRecommendation] = useState('Add upcoming exams or tasks, then generate a personalized weekly plan.')
+  const [recommendation, setRecommendation] = useState('Add upcoming exams or tasks, then generate a personalized weekly plan. Drag tasks onto any day to reschedule.')
 
   useEffect(() => {
     let active = true
@@ -86,6 +94,28 @@ export function StudyPlannerPage() {
       setTasks(t => t.map(task => task.id === id ? { ...task, done: target.done } : task))
       toast.error('Failed to update task')
     }
+  }
+
+  const rescheduleTask = async (taskId: number, targetDate: Date) => {
+    const existing = tasks.find(t => t.id === taskId)
+    if (!existing) return
+    const normalized = new Date(targetDate)
+    normalized.setHours(12, 0, 0, 0)
+    const prevDate = existing.date
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, date: normalized } : t))
+    try {
+      await api.patch(`/planner/tasks/${taskId}`, { taskDate: normalized.toISOString() })
+      toast.success(`Moved to ${formatDate(normalized, { month: 'short', day: 'numeric' })}`)
+    } catch {
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, date: prevDate } : t))
+      toast.error('Failed to reschedule task')
+    }
+  }
+
+  const shiftTaskDay = (task: StudyTask, deltaDays: number) => {
+    const next = new Date(task.date)
+    next.setDate(next.getDate() + deltaDays)
+    void rescheduleTask(task.id, next)
   }
 
   const deleteTask = async (id: number) => {
@@ -203,60 +233,139 @@ export function StudyPlannerPage() {
     }
   }
 
+  const exportCalendarIcs = () => {
+    if (exams.length === 0 && tasks.filter(t => !t.done).length === 0) {
+      toast.error('Add at least one exam or pending task before exporting')
+      return
+    }
+    const ics = buildStudyCalendarIcs(exams, tasks)
+    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'studymate-schedule.ics'
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Calendar exported (.ics)')
+  }
+
   const daysUntil = (date: Date) => Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86400000))
 
   return (
-    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Study Planner</h1>
-          <p className="text-[#707070] text-sm mt-1">Organize your academic schedule and deadlines</p>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Study Planner</h1>
+          <p className="text-text-secondary text-sm mt-1">AI schedule generation, drag-to-reschedule calendar, and .ics calendar export</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => setShowExamModal(true)} leftIcon={<Plus className="w-4 h-4" />}>Add exam</Button>
-          <Button onClick={generatePlan} isLoading={generatingPlan} leftIcon={<Sparkles className="w-4 h-4" />}>Generate plan</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={exportCalendarIcs} leftIcon={<Download className="w-4 h-4" />}>
+            Export .ics
+          </Button>
+          <Button variant="secondary" onClick={() => setShowExamModal(true)} leftIcon={<Plus className="w-4 h-4" />}>
+            Add exam
+          </Button>
+          <Button onClick={generatePlan} isLoading={generatingPlan} leftIcon={<Sparkles className="w-4 h-4" />}>
+            Generate plan
+          </Button>
         </div>
       </div>
 
       {(loadError || aiError) && (
-        <div className="p-4 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D] flex items-start gap-2.5">
+        <div className="p-4 rounded-xl bg-error-light border border-error/30 text-xs text-error flex items-start gap-2.5">
           <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <span>{aiError || loadError}</span>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Calendar */}
         <div className="lg:col-span-2 space-y-6">
-          <Card className="p-5 bg-white border-[#E7E5E0]">
+          <Card className="p-5 bg-surface border-border">
             <CardHeader className="mb-4">
-              <CardTitle className="flex items-center gap-2"><Calendar className="w-4 h-4 text-[#5965B3]" /> Weekly Schedule</CardTitle>
+              <div>
+                <CardTitle className="flex items-center gap-2"><Calendar className="w-4 h-4 text-accent-text" /> Weekly Schedule</CardTitle>
+                <p className="text-[11px] text-text-muted mt-0.5">Drag any task chip or card onto a day cell to reschedule</p>
+              </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => setWeekDate(d => { const n = new Date(d); n.setDate(d.getDate() - 7); return n })} className="btn-icon text-[#707070] hover:text-[#252525]"><ChevronLeft className="w-4 h-4" /></button>
-                <span className="text-xs text-[#707070] font-mono">
+                <button
+                  type="button"
+                  onClick={() => setWeekDate(d => { const n = new Date(d); n.setDate(d.getDate() - 7); return n })}
+                  className="btn-icon text-text-secondary hover:text-text-primary"
+                  aria-label="Previous week"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-xs text-text-secondary font-mono">
                   {weekDays[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {weekDays[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                 </span>
-                <button onClick={() => setWeekDate(d => { const n = new Date(d); n.setDate(d.getDate() + 7); return n })} className="btn-icon text-[#707070] hover:text-[#252525]"><ChevronRight className="w-4 h-4" /></button>
+                <button
+                  type="button"
+                  onClick={() => setWeekDate(d => { const n = new Date(d); n.setDate(d.getDate() + 7); return n })}
+                  className="btn-icon text-text-secondary hover:text-text-primary"
+                  aria-label="Next week"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
             </CardHeader>
-            <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
               {weekDays.map((day, i) => {
                 const dayTasks = getTasksForDay(day)
                 const isToday = day.toDateString() === new Date().toDateString()
+                const isDragOver = dragOverDayIdx === i
                 return (
-                  <div key={i} className={cn('min-h-24 rounded-lg p-2 border transition-all bg-[#FAF9F6]', isToday ? 'border-[#5965B3] bg-[#ECEEF7]/40' : 'border-[#E7E5E0]')}>
+                  <div
+                    key={i}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      if (dragOverDayIdx !== i) setDragOverDayIdx(i)
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverDayIdx === i) setDragOverDayIdx(null)
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      setDragOverDayIdx(null)
+                      const rawId = e.dataTransfer.getData('text/plain')
+                      const parsedId = Number(rawId) || draggedTaskId
+                      if (parsedId) {
+                        void rescheduleTask(parsedId, day)
+                      }
+                      setDraggedTaskId(null)
+                    }}
+                    className={cn(
+                      'min-h-28 rounded-lg p-1.5 sm:p-2 border transition-all bg-surface-subtle',
+                      isToday ? 'border-accent bg-accent-light/40' : 'border-border',
+                      isDragOver && 'ring-2 ring-accent bg-accent-light/60'
+                    )}
+                  >
                     <div className="text-center mb-1.5">
-                      <div className="text-[10px] text-[#999999] font-mono uppercase">{['Su','Mo','Tu','We','Th','Fr','Sa'][i]}</div>
+                      <div className="text-[10px] text-text-muted font-mono uppercase">{['Su','Mo','Tu','We','Th','Fr','Sa'][i]}</div>
                       <div className={cn('text-xs font-semibold w-6 h-6 rounded-full flex items-center justify-center mx-auto mt-0.5',
-                        isToday ? 'bg-[#5965B3] text-white' : 'text-[#252525]'
+                        isToday ? 'bg-accent text-white' : 'text-text-primary'
                       )}>{day.getDate()}</div>
                     </div>
                     <div className="space-y-1">
-                      {dayTasks.map(task => (
-                        <div key={task.id} className={cn('w-full h-1.5 rounded-full bg-[#5965B3]', task.done && 'opacity-40')} />
+                      {dayTasks.slice(0, 3).map(task => (
+                        <div
+                          key={task.id}
+                          draggable
+                          onDragStart={(e) => {
+                            setDraggedTaskId(task.id)
+                            e.dataTransfer.setData('text/plain', String(task.id))
+                          }}
+                          onDragEnd={() => { setDraggedTaskId(null); setDragOverDayIdx(null) }}
+                          title={`${task.subject}: ${task.topic} (drag to move)`}
+                          className={cn(
+                            'text-[10px] px-1.5 py-0.5 rounded bg-accent-light text-accent-text truncate cursor-grab active:cursor-grabbing font-medium',
+                            task.done && 'opacity-45 line-through'
+                          )}
+                        >
+                          {task.topic}
+                        </div>
                       ))}
-                      {dayTasks.length > 0 && (
-                        <div className="text-[10px] text-[#707070] font-mono text-center mt-1">{dayTasks.length} task{dayTasks.length > 1 ? 's' : ''}</div>
+                      {dayTasks.length > 3 && (
+                        <div className="text-[10px] text-text-secondary font-mono text-center">+{dayTasks.length - 3} more</div>
                       )}
                     </div>
                   </div>
@@ -265,31 +374,74 @@ export function StudyPlannerPage() {
             </div>
           </Card>
 
-          {/* Task List */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-[#707070]">Study Tasks</h3>
-              <button onClick={() => setShowTaskModal(true)} className="btn btn-secondary btn-sm gap-1.5"><Plus className="w-3.5 h-3.5" /> Add task</button>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">Study Tasks</h3>
+              <button type="button" onClick={() => setShowTaskModal(true)} className="btn btn-secondary btn-sm gap-1.5"><Plus className="w-3.5 h-3.5" /> Add task</button>
             </div>
             {loading ? (
-              <div className="text-xs text-[#707070] py-4">Loading tasks...</div>
+              <SkeletonList count={3} />
             ) : tasks.length === 0 ? (
-              <div className="card p-6 bg-white border-[#E7E5E0] text-center text-xs text-[#707070]">
-                No study tasks scheduled yet. Add a task or click "Generate plan".
-              </div>
+              <EmptyState
+                icon={Calendar}
+                title="No study tasks scheduled yet"
+                description="Add a study task manually or generate an AI plan from your upcoming exams."
+                action={<Button size="sm" onClick={() => setShowTaskModal(true)} leftIcon={<Plus className="w-3.5 h-3.5" />}>Add task</Button>}
+              />
             ) : tasks.map(task => (
-              <motion.div key={task.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
-                className={cn('card p-4 flex items-center gap-3.5 bg-white border-[#E7E5E0] group', task.done && 'opacity-60')}
+              <motion.div
+                key={task.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                draggable
+                onDragStart={(e) => {
+                  setDraggedTaskId(task.id)
+                  const dt = (e as unknown as React.DragEvent).dataTransfer
+                  dt?.setData('text/plain', String(task.id))
+                }}
+                onDragEnd={() => { setDraggedTaskId(null); setDragOverDayIdx(null) }}
+                className={cn('card p-4 flex items-center gap-3 bg-surface border-border group cursor-grab active:cursor-grabbing', task.done && 'opacity-60')}
               >
-                <button onClick={() => void toggleTask(task.id)} className={cn('flex-shrink-0', task.done ? 'text-[#5C8A6A]' : 'text-[#999999] hover:text-[#5965B3]')}>
+                <GripVertical className="w-4 h-4 text-text-muted hidden sm:block flex-shrink-0" aria-hidden="true" />
+                <button
+                  type="button"
+                  onClick={() => void toggleTask(task.id)}
+                  className={cn('flex-shrink-0', task.done ? 'text-success' : 'text-text-muted hover:text-accent-text')}
+                  aria-label={task.done ? `Mark ${task.topic} pending` : `Mark ${task.topic} completed`}
+                >
                   {task.done ? <CheckCircle2 className="w-4.5 h-4.5" /> : <Circle className="w-4.5 h-4.5" />}
                 </button>
                 <div className="flex-1 min-w-0">
-                  <div className={cn('text-sm font-semibold', task.done ? 'text-[#707070] line-through' : 'text-[#252525]')}>{task.topic}</div>
-                  <div className="text-xs text-[#707070]">{task.subject} • {task.duration} min • {formatDate(task.date, { month: 'short', day: 'numeric' })}</div>
+                  <div className={cn('text-sm font-semibold truncate', task.done ? 'text-text-secondary line-through' : 'text-text-primary')}>{task.topic}</div>
+                  <div className="text-xs text-text-secondary">{task.subject} • {task.duration} min • {formatDate(task.date, { month: 'short', day: 'numeric' })}</div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => shiftTaskDay(task, -1)}
+                    className="px-1.5 py-0.5 rounded border border-border text-[10px] font-mono text-text-secondary hover:bg-surface-subtle"
+                    title="Move back 1 day"
+                    aria-label={`Move ${task.topic} back one day`}
+                  >
+                    -1d
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => shiftTaskDay(task, 1)}
+                    className="px-1.5 py-0.5 rounded border border-border text-[10px] font-mono text-text-secondary hover:bg-surface-subtle"
+                    title="Move forward 1 day"
+                    aria-label={`Move ${task.topic} forward one day`}
+                  >
+                    +1d
+                  </button>
                 </div>
                 <Badge variant={task.done ? 'success' : 'neutral'}>{task.done ? 'Completed' : 'Pending'}</Badge>
-                <button onClick={() => void deleteTask(task.id)} className="text-[#999999] hover:text-[#B45D5D] opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  type="button"
+                  onClick={() => void deleteTask(task.id)}
+                  className="text-text-muted hover:text-error sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                  aria-label={`Delete task ${task.topic}`}
+                >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </motion.div>
@@ -297,47 +449,51 @@ export function StudyPlannerPage() {
           </div>
         </div>
 
-        {/* Exams sidebar */}
         <div className="space-y-5">
-          <Card className="p-5 bg-white border-[#E7E5E0]">
+          <Card className="p-5 bg-surface border-border">
             <CardHeader className="mb-3">
-              <CardTitle className="flex items-center gap-2"><Target className="w-4 h-4 text-[#B4863A]" /> Upcoming Exams</CardTitle>
+              <CardTitle className="flex items-center gap-2"><Target className="w-4 h-4 text-warning" /> Upcoming Exams</CardTitle>
             </CardHeader>
             <div className="space-y-3">
               {exams.length === 0 ? (
-                <div className="text-xs text-[#707070] py-2">No upcoming exams added.</div>
+                <div className="text-xs text-text-secondary py-2">No upcoming exams added.</div>
               ) : [...exams].sort((a, b) => a.date.getTime() - b.date.getTime()).map(exam => {
                 const days = daysUntil(exam.date)
                 return (
-                  <div key={exam.id} className="p-3.5 rounded-lg bg-[#FAF9F6] border border-[#E7E5E0] group">
+                  <div key={exam.id} className="p-3.5 rounded-lg bg-surface-subtle border border-border group">
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold text-[#252525]">{exam.subject}</span>
+                      <span className="text-xs font-semibold text-text-primary">{exam.subject}</span>
                       <div className="flex items-center gap-1.5">
                         <Badge variant={days <= 3 ? 'danger' : days <= 7 ? 'warning' : 'neutral'}>
                           {days}d left
                         </Badge>
-                        <button onClick={() => void deleteExam(exam.id)} className="text-[#999999] hover:text-[#B45D5D] opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          onClick={() => void deleteExam(exam.id)}
+                          className="text-text-muted hover:text-error sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                          aria-label={`Delete exam ${exam.subject}`}
+                        >
                           <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     </div>
-                    <div className="text-xs text-[#707070] mb-1">{formatDate(exam.date)}</div>
-                    <div className="text-[11px] text-[#999999] font-mono">{exam.hoursNeeded}h needed • {Math.round(exam.hoursNeeded / Math.max(days, 1) * 10) / 10}h/day</div>
+                    <div className="text-xs text-text-secondary mb-1">{formatDate(exam.date)}</div>
+                    <div className="text-[11px] text-text-muted font-mono">{exam.hoursNeeded}h needed • {Math.round(exam.hoursNeeded / Math.max(days, 1) * 10) / 10}h/day</div>
                   </div>
                 )
               })}
             </div>
-            <button onClick={() => setShowExamModal(true)} className="btn btn-ghost w-full mt-3 text-xs gap-1.5">
+            <button type="button" onClick={() => setShowExamModal(true)} className="btn btn-ghost w-full mt-3 text-xs gap-1.5">
               <Plus className="w-3.5 h-3.5" /> Add exam
             </button>
           </Card>
 
-          <Card className="p-5 bg-[#FAF9F6] border-[#E7E5E0]">
+          <Card className="p-5 bg-surface-subtle border-border">
             <div className="flex items-center gap-2 mb-2">
-              <Brain className="w-4 h-4 text-[#5965B3]" />
-              <span className="text-xs font-semibold text-[#252525]">Planner Recommendation</span>
+              <Brain className="w-4 h-4 text-accent-text" />
+              <span className="text-xs font-semibold text-text-primary">Planner Recommendation</span>
             </div>
-            <p className="text-xs text-[#707070] leading-relaxed">
+            <p className="text-xs text-text-secondary leading-relaxed">
               {recommendation}
             </p>
           </Card>

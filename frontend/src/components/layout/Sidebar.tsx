@@ -4,7 +4,7 @@ import {
   Home, MessageSquare, FileText, BookOpen, Zap, HelpCircle,
   Calendar, BarChart3, Clock, Trophy, Settings, LogOut,
   Brain, Code2, Video, ScanLine, Map, Percent, Calculator,
-  ChevronLeft, ChevronRight, User, Bookmark
+  ChevronLeft, ChevronRight, User, Bookmark, Users, Mic, X
 } from 'lucide-react'
 import { useAppStore } from '@/stores/appStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -24,6 +24,7 @@ const navGroups = [
       { icon: MessageSquare, label: 'Chat', path: '/chat', shortcut: '⌘2' },
       { icon: Brain, label: 'Tutor', path: '/ai-tutor' },
       { icon: BookOpen, label: 'Notes', path: '/notes' },
+      { icon: Mic, label: 'Voice', path: '/voice' },
     ],
   },
   {
@@ -57,86 +58,98 @@ const navGroups = [
       { icon: Percent, label: 'Attendance', path: '/attendance' },
       { icon: Calculator, label: 'CGPA', path: '/cgpa' },
       { icon: Trophy, label: 'Achievements', path: '/achievements' },
+      { icon: Users, label: 'Leaderboard', path: '/leaderboard' },
     ],
   },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  mobileOpen?: boolean
+  onCloseMobile?: () => void
+}
+
+export function Sidebar({ mobileOpen = false, onCloseMobile }: SidebarProps) {
   const { sidebarCollapsed, setSidebarCollapsed } = useAppStore()
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
 
   const handleLogout = async () => {
     await logout()
+    onCloseMobile?.()
     toast.success('Logged out')
     navigate('/login')
   }
 
-  const W = sidebarCollapsed ? 56 : 220
+  const desktopW = sidebarCollapsed ? 56 : 220
 
-  return (
-    <motion.aside
-      initial={false}
-      animate={{ width: W }}
-      transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-      className="fixed left-0 top-0 h-full bg-white border-r border-[#E7E5E0] flex flex-col z-40 overflow-hidden select-none"
-    >
+  const renderContent = (collapsed: boolean, isMobile: boolean) => (
+    <>
       {/* Brand header */}
-      <div className="flex items-center h-13 border-b border-[#E7E5E0] flex-shrink-0 px-3.5 gap-2.5">
-        <div
-          className="w-7 h-7 rounded-md bg-[#5965B3] flex items-center justify-center text-white flex-shrink-0 cursor-pointer shadow-xs"
-          onClick={() => navigate('/dashboard')}
+      <div className="flex items-center justify-between h-13 border-b border-border flex-shrink-0 px-3.5 gap-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            navigate('/dashboard')
+            onCloseMobile?.()
+          }}
+          className="flex items-center gap-2.5 min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-md"
+          aria-label="Go to StudyMate dashboard"
         >
-          <Bookmark className="w-4 h-4 fill-white/20 stroke-[2.2]" />
-        </div>
-
-        <AnimatePresence>
-          {!sidebarCollapsed && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1, transition: { delay: 0.05 } }}
-              exit={{ opacity: 0, transition: { duration: 0.1 } }}
-              className="flex items-center justify-between flex-1 min-w-0"
-            >
-              <span className="font-semibold text-[#252525] text-[0.9375rem] tracking-tight truncate leading-none">
-                StudyMate
-              </span>
-            </motion.div>
+          <div className="w-7 h-7 rounded-md bg-[#5965B3] flex items-center justify-center text-white flex-shrink-0 shadow-xs">
+            <Bookmark className="w-4 h-4 fill-white/20 stroke-[2.2]" aria-hidden="true" />
+          </div>
+          {!collapsed && (
+            <span className="font-semibold text-text-primary text-[0.9375rem] tracking-tight truncate leading-none">
+              StudyMate
+            </span>
           )}
-        </AnimatePresence>
+        </button>
+
+        {isMobile && (
+          <button
+            type="button"
+            onClick={onCloseMobile}
+            aria-label="Close navigation menu"
+            className="btn-icon-sm btn-ghost text-text-secondary hover:text-text-primary"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto py-3.5 no-scrollbar px-2.5 space-y-3.5">
+      <nav aria-label="Main workspace navigation" className="flex-1 overflow-y-auto py-3.5 no-scrollbar px-2.5 space-y-3.5">
         {navGroups.map((group) => (
           <div key={group.label}>
-            {!sidebarCollapsed && (
-              <p className="text-[11px] font-semibold text-[#999999] uppercase tracking-wider px-2 mb-1.5">
+            {!collapsed && (
+              <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider px-2 mb-1.5">
                 {group.label}
               </p>
             )}
-            {sidebarCollapsed && <div className="divider mx-1 mb-2" />}
+            {collapsed && <div className="divider mx-1 mb-2" />}
             <div className="space-y-0.5">
               {group.items.map((item) => (
                 <NavLink
                   key={item.path}
                   to={item.path}
-                  title={sidebarCollapsed ? item.label : undefined}
+                  onClick={() => isMobile && onCloseMobile?.()}
+                  title={collapsed ? item.label : undefined}
+                  aria-label={item.label}
                   className={({ isActive }) =>
                     cn(
                       'sidebar-item',
                       isActive && 'sidebar-item-active',
-                      sidebarCollapsed && 'justify-center'
+                      collapsed && 'justify-center'
                     )
                   }
                 >
-                  <item.icon className="w-4 h-4 flex-shrink-0 stroke-[1.8]" />
-                  {!sidebarCollapsed && (
+                  <item.icon className="w-4 h-4 flex-shrink-0 stroke-[1.8]" aria-hidden="true" />
+                  {!collapsed && (
                     <>
                       <span className="flex-1 truncate">{item.label}</span>
-                      {'shortcut' in item && (
-                        <span className="text-[10px] font-mono text-[#999999] bg-[#F0F0ED] px-1.5 py-0.5 rounded border border-[#E7E5E0]">
-                          {(item as { shortcut: string }).shortcut}
+                      {'shortcut' in item && item.shortcut && (
+                        <span className="text-[10px] font-mono text-text-muted bg-surface-secondary px-1.5 py-0.5 rounded border border-border">
+                          {item.shortcut}
                         </span>
                       )}
                     </>
@@ -149,60 +162,109 @@ export function Sidebar() {
       </nav>
 
       {/* Footer */}
-      <div className="border-t border-[#E7E5E0] p-2 flex-shrink-0 space-y-0.5 bg-[#FAF9F6]">
-        {/* Settings */}
+      <div className="border-t border-border p-2 flex-shrink-0 space-y-0.5 bg-surface-subtle">
         <NavLink
           to="/settings"
-          title={sidebarCollapsed ? 'Settings' : undefined}
+          onClick={() => isMobile && onCloseMobile?.()}
+          title={collapsed ? 'Settings' : undefined}
+          aria-label="Settings"
           className={({ isActive }) =>
-            cn('sidebar-item', isActive && 'sidebar-item-active', sidebarCollapsed && 'justify-center')
+            cn('sidebar-item', isActive && 'sidebar-item-active', collapsed && 'justify-center')
           }
         >
-          <Settings className="w-4 h-4 flex-shrink-0 stroke-[1.8]" />
-          {!sidebarCollapsed && <span className="flex-1 truncate">Settings</span>}
+          <Settings className="w-4 h-4 flex-shrink-0 stroke-[1.8]" aria-hidden="true" />
+          {!collapsed && <span className="flex-1 truncate">Settings</span>}
         </NavLink>
 
-        {/* Profile */}
         <NavLink
           to="/profile"
-          title={sidebarCollapsed ? user?.name || 'Profile' : undefined}
+          onClick={() => isMobile && onCloseMobile?.()}
+          title={collapsed ? user?.name || 'Profile' : undefined}
+          aria-label="Profile"
           className={({ isActive }) =>
-            cn('sidebar-item', isActive && 'sidebar-item-active', sidebarCollapsed && 'justify-center')
+            cn('sidebar-item', isActive && 'sidebar-item-active', collapsed && 'justify-center')
           }
         >
           <div className="w-4 h-4 rounded-full bg-[#5965B3] text-white text-[9px] font-semibold flex items-center justify-center flex-shrink-0">
-            {user?.name?.[0]?.toUpperCase() || <User className="w-2.5 h-2.5" />}
+            {user?.name?.[0]?.toUpperCase() || <User className="w-2.5 h-2.5" aria-hidden="true" />}
           </div>
-          {!sidebarCollapsed && (
+          {!collapsed && (
             <span className="flex-1 truncate">{user?.name?.split(' ')[0] || 'Profile'}</span>
           )}
         </NavLink>
 
-        {/* Logout */}
         <button
-          onClick={handleLogout}
-          title={sidebarCollapsed ? 'Logout' : undefined}
+          type="button"
+          onClick={() => void handleLogout()}
+          title={collapsed ? 'Logout' : undefined}
+          aria-label="Logout"
           className={cn(
-            'sidebar-item w-full text-[#707070] hover:text-[#B45D5D] hover:bg-[#FBEFEF]',
-            sidebarCollapsed && 'justify-center'
+            'sidebar-item w-full text-text-secondary hover:text-error hover:bg-error-light',
+            collapsed && 'justify-center'
           )}
         >
-          <LogOut className="w-4 h-4 flex-shrink-0 stroke-[1.8]" />
-          {!sidebarCollapsed && <span className="flex-1 text-left truncate">Logout</span>}
+          <LogOut className="w-4 h-4 flex-shrink-0 stroke-[1.8]" aria-hidden="true" />
+          {!collapsed && <span className="flex-1 text-left truncate">Logout</span>}
         </button>
 
-        {/* Collapse toggle */}
-        <button
-          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          className="sidebar-item w-full justify-center text-[#999999] hover:text-[#252525] hover:bg-[#F0F0ED]"
-        >
-          {sidebarCollapsed
-            ? <ChevronRight className="w-4 h-4 stroke-[1.8]" />
-            : <ChevronLeft className="w-4 h-4 stroke-[1.8]" />
-          }
-        </button>
+        {!isMobile && (
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            className="sidebar-item w-full justify-center text-text-muted hover:text-text-primary hover:bg-surface-secondary"
+          >
+            {sidebarCollapsed
+              ? <ChevronRight className="w-4 h-4 stroke-[1.8]" />
+              : <ChevronLeft className="w-4 h-4 stroke-[1.8]" />
+            }
+          </button>
+        )}
       </div>
-    </motion.aside>
+    </>
+  )
+
+  return (
+    <>
+      {/* Desktop Sidebar */}
+      <motion.aside
+        initial={false}
+        animate={{ width: desktopW }}
+        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+        className="hidden md:flex fixed left-0 top-0 h-full bg-surface border-r border-border flex-col z-40 overflow-hidden select-none"
+      >
+        {renderContent(sidebarCollapsed, false)}
+      </motion.aside>
+
+      {/* Mobile Drawer */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <div className="md:hidden fixed inset-0 z-50 flex">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="fixed inset-0 bg-black/45 backdrop-blur-xs"
+              onClick={onCloseMobile}
+              aria-hidden="true"
+            />
+            <motion.aside
+              role="dialog"
+              aria-modal="true"
+              aria-label="Workspace navigation"
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="relative w-64 max-w-[82vw] h-full bg-surface border-r border-border flex flex-col z-10 overflow-hidden select-none shadow-lg"
+            >
+              {renderContent(false, true)}
+            </motion.aside>
+          </div>
+        )}
+      </AnimatePresence>
+    </>
   )
 }

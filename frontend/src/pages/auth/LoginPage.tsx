@@ -35,27 +35,27 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F7F5] flex text-[#252525]">
+    <div className="min-h-screen bg-bg flex text-text-primary">
       {/* Left Feature Hero */}
       <motion.div
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.4 }}
-        className="hidden lg:flex flex-col w-1/2 bg-white border-r border-[#E7E5E0] p-12 justify-between"
+        className="hidden lg:flex flex-col w-1/2 bg-surface border-r border-border p-12 justify-between"
       >
         <div>
           <div className="flex items-center gap-2.5 mb-10">
             <div className="w-8 h-8 rounded-md bg-[#5965B3] flex items-center justify-center text-white">
-              <Bookmark className="w-4 h-4 fill-white/20" />
+              <Bookmark className="w-4 h-4 fill-white/20" aria-hidden="true" />
             </div>
-            <span className="text-base font-semibold text-[#252525] tracking-tight">StudyMate</span>
+            <span className="text-base font-semibold text-text-primary tracking-tight">StudyMate</span>
           </div>
 
-          <h1 className="text-3xl font-bold text-[#252525] mb-3 tracking-tight">
+          <h1 className="text-3xl font-bold text-text-primary mb-3 tracking-tight">
             Your personal <br />
-            <span className="text-[#5965B3]">study workspace</span>
+            <span className="text-accent-text">study workspace</span>
           </h1>
-          <p className="text-sm text-[#707070] mb-8 leading-relaxed max-w-sm">
+          <p className="text-sm text-text-secondary mb-8 leading-relaxed max-w-sm">
             Everything you need for academic success — notes, flashcards, document reading, and focus sessions synced to your account.
           </p>
 
@@ -68,54 +68,54 @@ export function LoginPage() {
                 transition={{ duration: 0.3, delay: 0.2 + i * 0.08 }}
                 className="flex items-center gap-3"
               >
-                <div className="w-7 h-7 rounded-md bg-[#ECEEF7] text-[#5965B3] flex items-center justify-center">
-                  <feature.icon className="w-3.5 h-3.5" />
+                <div className="w-7 h-7 rounded-md bg-accent-light text-accent-text flex items-center justify-center">
+                  <feature.icon className="w-3.5 h-3.5" aria-hidden="true" />
                 </div>
-                <span className="text-xs font-medium text-[#252525]">{feature.text}</span>
+                <span className="text-xs font-medium text-text-primary">{feature.text}</span>
               </motion.div>
             ))}
           </div>
         </div>
 
-        <div className="pt-8 border-t border-[#E7E5E0] flex gap-8">
+        <div className="pt-8 border-t border-border flex gap-8">
           <div>
-            <div className="text-xl font-bold font-mono text-[#252525]">50,000+</div>
-            <div className="text-[11px] text-[#707070]">Active Students</div>
+            <div className="text-xl font-bold font-mono text-text-primary">50,000+</div>
+            <div className="text-[11px] text-text-secondary">Active Students</div>
           </div>
           <div>
-            <div className="text-xl font-bold font-mono text-[#252525]">2M+</div>
-            <div className="text-[11px] text-[#707070]">Study Hours</div>
+            <div className="text-xl font-bold font-mono text-text-primary">2M+</div>
+            <div className="text-[11px] text-text-secondary">Study Hours</div>
           </div>
         </div>
       </motion.div>
 
       {/* Right Login Card */}
-      <div className="flex-1 flex items-center justify-center p-8">
+      <div className="flex-1 flex items-center justify-center p-6 sm:p-8">
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
-          className="w-full max-w-sm bg-white border border-[#E7E5E0] rounded-2xl p-7 shadow-xs"
+          className="w-full max-w-sm bg-surface border border-border rounded-2xl p-7 shadow-xs"
         >
           <div className="lg:hidden flex items-center gap-2 mb-6">
             <div className="w-7 h-7 rounded-md bg-[#5965B3] text-white flex items-center justify-center">
-              <Bookmark className="w-4 h-4 fill-white/20" />
+              <Bookmark className="w-4 h-4 fill-white/20" aria-hidden="true" />
             </div>
-            <span className="text-base font-semibold text-[#252525]">StudyMate</span>
+            <span className="text-base font-semibold text-text-primary">StudyMate</span>
           </div>
 
-          <h2 className="text-2xl font-bold text-[#252525] mb-1 tracking-tight">Welcome to StudyMate</h2>
-          <p className="text-xs text-[#707070] mb-6">Sign in with your Google account to access your saved notes, flashcards, and planner.</p>
+          <h2 className="text-2xl font-bold text-text-primary mb-1 tracking-tight">Welcome to StudyMate</h2>
+          <p className="text-xs text-text-secondary mb-6">Sign in with your Google account to access your saved notes, flashcards, and planner.</p>
 
           <Button
             id="google-login-btn"
-            onClick={handleGoogleLogin}
+            onClick={() => void handleGoogleLogin()}
             isLoading={signingIn}
             size="lg"
             variant="secondary"
-            className="w-full justify-center gap-2.5 bg-white border border-[#E7E5E0] hover:border-[#D4D2CD] text-[#252525]"
+            className="w-full justify-center gap-2.5"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
               <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
               <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
@@ -124,13 +124,13 @@ export function LoginPage() {
             Continue with Google
           </Button>
 
-          <div className="mt-5 pt-5 border-t border-[#E7E5E0] flex items-center gap-2 text-[11px] text-[#707070]">
-            <ShieldCheck className="w-4 h-4 text-[#5C8A6A] flex-shrink-0" />
+          <div className="mt-5 pt-5 border-t border-border flex items-center gap-2 text-[11px] text-text-secondary">
+            <ShieldCheck className="w-4 h-4 text-success flex-shrink-0" aria-hidden="true" />
             <span>Your notes, quizzes, and academic progress are saved privately to your account.</span>
           </div>
 
-          <p className="text-center text-xs text-[#707070] mt-5">
-            <Link to="/" className="text-[#5965B3] hover:underline font-medium">
+          <p className="text-center text-xs text-text-secondary mt-5">
+            <Link to="/" className="text-accent-text hover:underline font-medium">
               ← Back to home
             </Link>
           </p>

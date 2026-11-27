@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
 import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { SkeletonList } from '@/components/ui/Skeleton'
 import { toast } from 'react-hot-toast'
 import { cn } from '@/lib/utils'
 import api from '@/lib/api'
@@ -104,45 +105,43 @@ export function AttendancePage() {
     : 0
 
   return (
-    <div className="p-6 md:p-8 max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="p-4 sm:p-6 md:p-8 max-w-4xl mx-auto space-y-6">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Attendance Tracker</h1>
-          <p className="text-[#707070] text-sm mt-1">Monitor course attendance and requirements</p>
+          <h1 className="text-2xl font-bold text-text-primary tracking-tight">Attendance Tracker</h1>
+          <p className="text-text-secondary text-sm mt-1">Monitor course attendance and requirements</p>
         </div>
         <Button onClick={() => setShowModal(true)} leftIcon={<Plus className="w-4 h-4" />}>Add subject</Button>
       </div>
 
       {loadError && (
-        <div className="p-4 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D]">{loadError}</div>
+        <div className="p-4 rounded-xl bg-error-light border border-error/30 text-xs text-error">{loadError}</div>
       )}
 
-      {/* Overall Card */}
       <Card className={cn(
-        'p-6 border bg-white',
-        overallAttendance >= 75 || subjects.length === 0 ? 'border-[#5C8A6A]/30' : 'border-[#B45D5D]/30'
+        'p-6 border bg-surface',
+        overallAttendance >= 75 || subjects.length === 0 ? 'border-success/30' : 'border-error/30'
       )}>
         <div className="flex items-center justify-between mb-3">
           <div>
-            <div className="text-xs font-semibold text-[#707070] uppercase tracking-wider mb-1">Overall Attendance</div>
-            <div className="text-4xl font-bold font-mono text-[#252525]">{overallAttendance.toFixed(1)}%</div>
+            <div className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-1">Overall Attendance</div>
+            <div className="text-4xl font-bold font-mono text-text-primary">{overallAttendance.toFixed(1)}%</div>
           </div>
           {overallAttendance >= 75 || subjects.length === 0
-            ? <CheckCircle2 className="w-8 h-8 text-[#5C8A6A]" />
-            : <AlertTriangle className="w-8 h-8 text-[#B45D5D]" />}
+            ? <CheckCircle2 className="w-8 h-8 text-success" />
+            : <AlertTriangle className="w-8 h-8 text-error" />}
         </div>
-        <div className="h-2 bg-[#F0F0ED] rounded-full overflow-hidden">
+        <div className="h-2 bg-surface-secondary rounded-full overflow-hidden">
           <motion.div
-            className={`h-full rounded-full ${overallAttendance >= 75 || subjects.length === 0 ? 'bg-[#5C8A6A]' : 'bg-[#B45D5D]'}`}
+            className={`h-full rounded-full ${overallAttendance >= 75 || subjects.length === 0 ? 'bg-success' : 'bg-error'}`}
             animate={{ width: `${Math.min(overallAttendance, 100)}%` }}
             transition={{ duration: 0.6, ease: 'easeOut' }}
           />
         </div>
       </Card>
 
-      {/* Subjects */}
       {loading ? (
-        <div className="text-center py-8 text-xs text-[#707070]">Loading attendance...</div>
+        <SkeletonList count={3} />
       ) : subjects.length === 0 ? (
         <EmptyState
           icon={CheckCircle2}
@@ -163,34 +162,48 @@ export function AttendancePage() {
                 key={subject.id}
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="card p-5 bg-white border-[#E7E5E0]"
+                className="card p-5 bg-surface border-border"
               >
-                <div className="flex items-start justify-between mb-3">
+                <div className="flex items-start justify-between mb-3 gap-2">
                   <div>
-                    <h3 className="font-semibold text-[#252525] text-sm">{subject.name}</h3>
-                    <div className="flex items-center gap-2.5 mt-1 text-xs text-[#707070]">
+                    <h3 className="font-semibold text-text-primary text-sm">{subject.name}</h3>
+                    <div className="flex flex-wrap items-center gap-2.5 mt-1 text-xs text-text-secondary">
                       <span>{subject.attended}/{subject.total} classes</span>
                       <Badge variant={safe ? 'success' : 'danger'}>{pct.toFixed(1)}%</Badge>
-                      <span className="font-mono text-[11px] text-[#999999]">Required: {subject.required}%</span>
+                      <span className="font-mono text-[11px] text-text-muted">Required: {subject.required}%</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <button onClick={() => void markAttendance(subject.id, 'present')} className="btn btn-sm bg-[#EDF5F0] border border-[#5C8A6A]/30 text-[#5C8A6A] hover:bg-[#5C8A6A] hover:text-white" title="Mark Present">
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => void markAttendance(subject.id, 'present')}
+                      className="btn btn-sm bg-success-light border border-success/30 text-success hover:bg-success hover:text-white"
+                      title="Mark Present"
+                      aria-label={`Mark ${subject.name} present`}
+                    >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => void markAttendance(subject.id, 'absent')} className="btn btn-sm bg-[#FBEFEF] border border-[#B45D5D]/30 text-[#B45D5D] hover:bg-[#B45D5D] hover:text-white" title="Mark Absent">
+                    <button
+                      onClick={() => void markAttendance(subject.id, 'absent')}
+                      className="btn btn-sm bg-error-light border border-error/30 text-error hover:bg-error hover:text-white"
+                      title="Mark Absent"
+                      aria-label={`Mark ${subject.name} absent`}
+                    >
                       <XCircle className="w-3.5 h-3.5" />
                     </button>
-                    <button onClick={() => void deleteSubject(subject.id)} className="btn-icon-sm btn-ghost text-[#999999] hover:text-[#B45D5D]">
+                    <button
+                      onClick={() => void deleteSubject(subject.id)}
+                      className="btn-icon-sm btn-ghost text-text-muted hover:text-error"
+                      aria-label={`Delete ${subject.name}`}
+                    >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
 
-                <div className="h-1.5 bg-[#F0F0ED] rounded-full overflow-hidden mb-3">
+                <div className="h-1.5 bg-surface-secondary rounded-full overflow-hidden mb-3">
                   <motion.div
                     className={`h-full rounded-full transition-all ${
-                      pct >= subject.required ? 'bg-[#5C8A6A]' : pct >= 65 ? 'bg-[#B4863A]' : 'bg-[#B45D5D]'
+                      pct >= subject.required ? 'bg-success' : pct >= 65 ? 'bg-warning' : 'bg-error'
                     }`}
                     animate={{ width: `${Math.min(pct, 100)}%` }}
                     transition={{ duration: 0.5 }}
@@ -199,7 +212,7 @@ export function AttendancePage() {
 
                 <div className={cn(
                   'text-xs rounded-lg px-3 py-2 flex items-center gap-2 font-medium',
-                  safe ? 'bg-[#EDF5F0] text-[#5C8A6A]' : 'bg-[#FBEFEF] text-[#B45D5D]'
+                  safe ? 'bg-success-light text-success' : 'bg-error-light text-error'
                 )}>
                   {safe ? (
                     <><TrendingUp className="w-3.5 h-3.5 flex-shrink-0" /> You can miss <strong>{canMiss}</strong> more class{canMiss !== 1 ? 'es' : ''} safely</>

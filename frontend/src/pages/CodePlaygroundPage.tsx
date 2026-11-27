@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { motion } from 'framer-motion'
-import Editor from '@monaco-editor/react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Play, Brain, Bug, Zap, ChevronDown, Terminal, Loader2, RotateCcw, AlertCircle } from 'lucide-react'
 import { toast } from 'react-hot-toast'
+import { useAppStore, resolveTheme } from '@/stores/appStore'
 import { cn } from '@/lib/utils'
 import api from '@/lib/api'
+
+const MonacoEditor = lazy(() => import('@monaco-editor/react'))
 
 const LANGUAGES = [
   { id: 'python', label: 'Python', ext: '.py' },
@@ -82,6 +84,8 @@ console.log(greeting);`,
 }
 
 export function CodePlaygroundPage() {
+  const { theme } = useAppStore()
+  const effectiveTheme = resolveTheme(theme)
   const [language, setLanguage] = useState('python')
   const [code, setCode] = useState(SAMPLE_CODE.python)
   const [output, setOutput] = useState('')
@@ -134,23 +138,32 @@ export function CodePlaygroundPage() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-[#F7F7F5]">
+    <div className="h-full flex flex-col bg-bg">
       {/* Header Toolbar */}
-      <div className="h-12 border-b border-[#E7E5E0] bg-white flex items-center px-4 gap-2 flex-shrink-0">
+      <div className="min-h-12 border-b border-border bg-surface flex flex-wrap items-center px-3 sm:px-4 py-1.5 gap-2 flex-shrink-0">
         {/* Language Dropdown */}
         <div className="relative">
           <button
+            type="button"
             onClick={() => setShowLangMenu(m => !m)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#FAF9F6] border border-[#E7E5E0] text-xs font-mono text-[#252525] hover:border-[#D4D2CD]"
+            aria-expanded={showLangMenu}
+            aria-label="Select programming language"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-surface-subtle border border-border text-xs font-mono text-text-primary hover:border-border-strong"
           >
             <span>{LANGUAGES.find(l => l.id === language)?.label}</span>
-            <ChevronDown className="w-3.5 h-3.5 text-[#999999]" />
+            <ChevronDown className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
           </button>
           {showLangMenu && (
-            <div className="absolute top-10 left-0 bg-white border border-[#E7E5E0] rounded-lg shadow-lg z-20 py-1 min-w-36">
+            <div className="absolute top-10 left-0 bg-surface border border-border rounded-lg shadow-lg z-20 py-1 min-w-36">
               {LANGUAGES.map(lang => (
-                <button key={lang.id} onClick={() => switchLanguage(lang.id)}
-                  className={cn('w-full text-left px-3.5 py-1.5 text-xs hover:bg-[#F0F0ED] transition-colors', language === lang.id ? 'text-[#5965B3] font-semibold' : 'text-[#252525]')}
+                <button
+                  type="button"
+                  key={lang.id}
+                  onClick={() => switchLanguage(lang.id)}
+                  className={cn(
+                    'w-full text-left px-3.5 py-1.5 text-xs hover:bg-surface-secondary transition-colors',
+                    language === lang.id ? 'text-accent-text font-semibold' : 'text-text-primary'
+                  )}
                 >
                   {lang.label}
                 </button>
@@ -159,94 +172,112 @@ export function CodePlaygroundPage() {
           )}
         </div>
 
-        <div className="h-4 w-px bg-[#E7E5E0]" />
+        <div className="h-4 w-px bg-border" />
 
-        <button onClick={runCode} disabled={running}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#5C8A6A] text-white text-xs font-medium hover:opacity-90 transition-all disabled:opacity-50"
+        <button
+          type="button"
+          onClick={() => void runCode()}
+          disabled={running}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#3E7250] text-white text-xs font-medium hover:opacity-90 transition-all disabled:opacity-50"
         >
-          {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+          {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <Play className="w-3.5 h-3.5" aria-hidden="true" />}
           Run
         </button>
 
-        <div className="h-4 w-px bg-[#E7E5E0]" />
+        <div className="h-4 w-px bg-border" />
 
-        <button onClick={() => handleAI('explain')} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-[#707070] hover:text-[#252525] hover:bg-[#F0F0ED]">
-          <Brain className="w-3.5 h-3.5 text-[#5965B3]" /> Explain
+        <button type="button" onClick={() => void handleAI('explain')} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary">
+          <Brain className="w-3.5 h-3.5 text-accent-text" aria-hidden="true" /> Explain
         </button>
-        <button onClick={() => handleAI('debug')} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-[#707070] hover:text-[#252525] hover:bg-[#F0F0ED]">
-          <Bug className="w-3.5 h-3.5 text-[#5965B3]" /> Debug
+        <button type="button" onClick={() => void handleAI('debug')} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary">
+          <Bug className="w-3.5 h-3.5 text-accent-text" aria-hidden="true" /> Debug
         </button>
-        <button onClick={() => handleAI('optimize')} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-[#707070] hover:text-[#252525] hover:bg-[#F0F0ED]">
-          <Zap className="w-3.5 h-3.5 text-[#5965B3]" /> Optimize
+        <button type="button" onClick={() => void handleAI('optimize')} className="flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-surface-secondary">
+          <Zap className="w-3.5 h-3.5 text-accent-text" aria-hidden="true" /> Optimize
         </button>
 
         <div className="flex-1" />
-        <button onClick={() => { setCode(SAMPLE_CODE[language]); setOutput(''); setAiOutput(''); setAiError(null) }} className="btn-icon-sm btn-ghost text-[#707070]" title="Reset">
+        <button
+          type="button"
+          onClick={() => { setCode(SAMPLE_CODE[language]); setOutput(''); setAiOutput(''); setAiError(null) }}
+          className="btn-icon-sm btn-ghost text-text-secondary"
+          title="Reset code"
+          aria-label="Reset code to sample"
+        >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
       </div>
 
       {/* Code Editor & Output Pane */}
-      <div className="flex-1 flex overflow-hidden">
-        <div className="flex-1 overflow-hidden">
-          <Editor
-            height="100%"
-            language={language === 'cpp' ? 'cpp' : language}
-            value={code}
-            onChange={v => setCode(v || '')}
-            theme="vs-dark"
-            options={{
-              fontSize: 13,
-              fontFamily: 'JetBrains Mono, Fira Code, monospace',
-              lineNumbers: 'on',
-              minimap: { enabled: false },
-              scrollBeyondLastLine: false,
-              wordWrap: 'on',
-              tabSize: 4,
-              automaticLayout: true,
-              padding: { top: 12, bottom: 12 },
-              renderLineHighlight: 'gutter',
-              cursorBlinking: 'smooth',
-            }}
-          />
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        <div className="flex-1 min-h-[300px] overflow-hidden">
+          <Suspense
+            fallback={
+              <div className="h-full flex items-center justify-center bg-surface text-xs text-text-secondary gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-accent-text" />
+                Loading Monaco code editor...
+              </div>
+            }
+          >
+            <MonacoEditor
+              height="100%"
+              language={language === 'cpp' ? 'cpp' : language}
+              value={code}
+              onChange={v => setCode(v || '')}
+              theme={effectiveTheme === 'dark' ? 'vs-dark' : 'vs'}
+              options={{
+                fontSize: 13,
+                fontFamily: 'JetBrains Mono, Fira Code, monospace',
+                lineNumbers: 'on',
+                minimap: { enabled: false },
+                scrollBeyondLastLine: false,
+                wordWrap: 'on',
+                tabSize: 4,
+                automaticLayout: true,
+                padding: { top: 12, bottom: 12 },
+                renderLineHighlight: 'gutter',
+                cursorBlinking: 'smooth',
+              }}
+            />
+          </Suspense>
         </div>
 
         {/* Side Output & AI Panel */}
-        <div className="w-80 border-l border-[#E7E5E0] bg-white flex flex-col flex-shrink-0">
+        <div className="w-full lg:w-80 h-60 lg:h-auto border-t lg:border-t-0 lg:border-l border-border bg-surface flex flex-col flex-shrink-0">
           <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[#E7E5E0] bg-[#FAF9F6]">
-              <Terminal className="w-3.5 h-3.5 text-[#707070]" />
-              <span className="text-xs font-semibold text-[#252525]">Console Output</span>
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-surface-subtle">
+              <Terminal className="w-3.5 h-3.5 text-text-secondary" aria-hidden="true" />
+              <span className="text-xs font-semibold text-text-primary">Console Output</span>
             </div>
-            <div className="flex-1 p-4 font-mono text-xs text-[#252525] overflow-y-auto bg-[#F7F7F5]">
+            <div className="flex-1 p-4 font-mono text-xs text-text-primary overflow-y-auto bg-bg">
               {running ? (
-                <div className="flex items-center gap-2 text-[#5965B3]">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <div className="flex items-center gap-2 text-accent-text">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
                   Running code...
                 </div>
               ) : output ? (
                 <motion.pre initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="whitespace-pre-wrap leading-relaxed">{output}</motion.pre>
               ) : (
-                <span className="text-[#999999]">Click Run to execute code...</span>
+                <span className="text-text-muted">Click Run to execute code...</span>
               )}
             </div>
           </div>
 
           {(aiOutput || aiLoading || aiError) && (
-            <div className="border-t border-[#E7E5E0] flex flex-col max-h-60">
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-[#E7E5E0] bg-[#FAF9F6]">
-                <Brain className="w-3.5 h-3.5 text-[#5965B3]" />
-                <span className="text-xs font-semibold text-[#252525]">AI Analysis</span>
+            <div className="border-t border-border flex flex-col max-h-60">
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-surface-subtle">
+                <Brain className="w-3.5 h-3.5 text-accent-text" aria-hidden="true" />
+                <span className="text-xs font-semibold text-text-primary">AI Analysis</span>
               </div>
-              <div className="flex-1 overflow-y-auto p-3.5 text-xs text-[#252525] leading-relaxed bg-white">
+              <div className="flex-1 overflow-y-auto p-3.5 text-xs text-text-primary leading-relaxed bg-surface">
                 {aiLoading ? (
-                  <div className="flex items-center gap-2 text-[#5965B3]">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <div className="flex items-center gap-2 text-accent-text">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
                     Analyzing code...
                   </div>
                 ) : aiError ? (
-                  <div className="p-2.5 rounded-lg bg-[#FBEFEF] border border-[#B45D5D]/30 text-[#B45D5D] flex items-start gap-2">
-                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <div role="alert" className="p-2.5 rounded-lg bg-error-light border border-error/30 text-error flex items-start gap-2">
+                    <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" aria-hidden="true" />
                     <span>{aiError}</span>
                   </div>
                 ) : (

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { SkeletonList } from '@/components/ui/Skeleton'
 import { toast } from 'react-hot-toast'
 import api from '@/lib/api'
 
@@ -140,53 +141,50 @@ export function CGPAPage() {
   const reqGPA = requiredGPA()
 
   return (
-    <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 md:p-8 max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-[#252525] tracking-tight">CGPA Calculator</h1>
-        <p className="text-[#707070] text-sm mt-1">Calculate semester SGPA, cumulative CGPA, and targets</p>
+        <h1 className="text-2xl font-bold text-text-primary tracking-tight">CGPA Calculator</h1>
+        <p className="text-text-secondary text-sm mt-1">Calculate semester SGPA, cumulative CGPA, and targets</p>
       </div>
 
       {loadError && (
-        <div className="p-4 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D]">{loadError}</div>
+        <div className="p-4 rounded-xl bg-error-light border border-error/30 text-xs text-error">{loadError}</div>
       )}
 
-      {/* CGPA Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="p-5 text-center bg-white border-[#E7E5E0]">
-          <div className="text-[11px] text-[#707070] uppercase font-mono tracking-wider mb-1">Current CGPA</div>
-          <div className="text-4xl font-bold font-mono text-[#5965B3] mb-0.5">{cgpa.toFixed(2)}</div>
-          <div className="text-xs text-[#707070]">{semesters.length} semesters</div>
+        <Card className="p-5 text-center bg-surface border-border">
+          <div className="text-[11px] text-text-secondary uppercase font-mono tracking-wider mb-1">Current CGPA</div>
+          <div className="text-4xl font-bold font-mono text-accent-text mb-0.5">{cgpa.toFixed(2)}</div>
+          <div className="text-xs text-text-secondary">{semesters.length} semesters</div>
         </Card>
         {semesters.slice(-2).map(sem => (
-          <Card key={sem.id} className="p-5 text-center bg-white border-[#E7E5E0]">
-            <div className="text-[11px] text-[#707070] uppercase font-mono tracking-wider mb-1">{sem.name} SGPA</div>
-            <div className="text-3xl font-bold font-mono text-[#252525] mb-0.5">{calcSGPA(sem.subjects).toFixed(2)}</div>
-            <div className="text-xs text-[#707070]">{sem.subjects.length} subjects</div>
+          <Card key={sem.id} className="p-5 text-center bg-surface border-border">
+            <div className="text-[11px] text-text-secondary uppercase font-mono tracking-wider mb-1">{sem.name} SGPA</div>
+            <div className="text-3xl font-bold font-mono text-text-primary mb-0.5">{calcSGPA(sem.subjects).toFixed(2)}</div>
+            <div className="text-xs text-text-secondary">{sem.subjects.length} subjects</div>
           </Card>
         ))}
       </div>
 
-      {/* Predictor */}
-      <Card className="p-5 bg-[#FAF9F6] border-[#E7E5E0]">
-        <h3 className="font-semibold text-xs uppercase tracking-wider text-[#707070] flex items-center gap-2 mb-3"><Target className="w-4 h-4 text-[#5965B3]" /> Target CGPA Predictor</h3>
+      <Card className="p-5 bg-surface-subtle border-border">
+        <h3 className="font-semibold text-xs uppercase tracking-wider text-text-secondary flex items-center gap-2 mb-3"><Target className="w-4 h-4 text-accent-text" /> Target CGPA Predictor</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
           <Input id="target-cgpa" label="Target CGPA" type="number" step="0.1" max="10" value={targetCGPA} onChange={e => setTargetCGPA(e.target.value)} />
           <Input id="rem-sems" label="Remaining semesters" type="number" value={remainingSemesters} onChange={e => setRemainingSemesters(e.target.value)} />
-          <div className="p-3.5 rounded-lg bg-white border border-[#E7E5E0]">
+          <div className="p-3.5 rounded-lg bg-surface border border-border">
             {reqGPA !== null ? (
               <>
-                <div className="text-[11px] text-[#707070]">Required average SGPA</div>
-                <div className={`text-2xl font-bold font-mono ${reqGPA <= 10 ? 'text-[#5C8A6A]' : 'text-[#B45D5D]'}`}>{reqGPA.toFixed(2)}</div>
-                <div className="text-[11px] text-[#707070] mt-0.5">{reqGPA <= 10 ? 'Achievable target' : 'Unrealistic requirement'}</div>
+                <div className="text-[11px] text-text-secondary">Required average SGPA</div>
+                <div className={`text-2xl font-bold font-mono ${reqGPA <= 10 ? 'text-success' : 'text-error'}`}>{reqGPA.toFixed(2)}</div>
+                <div className="text-[11px] text-text-secondary mt-0.5">{reqGPA <= 10 ? 'Achievable target' : 'Unrealistic requirement'}</div>
               </>
-            ) : <div className="text-xs text-[#999999]">Add semesters to calculate</div>}
+            ) : <div className="text-xs text-text-muted">Add semesters to calculate</div>}
           </div>
         </div>
       </Card>
 
-      {/* Semester Tables */}
       {loading ? (
-        <div className="text-center py-8 text-xs text-[#707070]">Loading semesters...</div>
+        <SkeletonList count={3} />
       ) : semesters.length === 0 ? (
         <EmptyState
           icon={GraduationCap}
@@ -198,10 +196,10 @@ export function CGPAPage() {
         <div className="space-y-5">
           {semesters.map((sem) => (
             <motion.div key={sem.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-              <Card className="p-5 bg-white border-[#E7E5E0]">
+              <Card className="p-5 bg-surface border-border">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2.5">
-                    <h3 className="font-semibold text-[#252525] text-sm">{sem.name}</h3>
+                    <h3 className="font-semibold text-text-primary text-sm">{sem.name}</h3>
                     <Badge variant="brand">SGPA: {calcSGPA(sem.subjects).toFixed(2)}</Badge>
                   </div>
                   <Button size="sm" variant="secondary" onClick={() => void addSubject(sem.id)} leftIcon={<Plus className="w-3.5 h-3.5" />}>Add subject</Button>
@@ -209,22 +207,23 @@ export function CGPAPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="border-b border-[#E7E5E0] bg-[#FAF9F6]">
-                        <th className="text-left py-2 px-3 text-[#707070] font-medium">Subject</th>
-                        <th className="text-center py-2 px-3 text-[#707070] font-medium w-24">Credits</th>
-                        <th className="text-center py-2 px-3 text-[#707070] font-medium w-24">Grade</th>
-                        <th className="text-center py-2 px-3 text-[#707070] font-medium w-20">Points</th>
-                        <th className="w-10"></th>
+                      <tr className="border-b border-border bg-surface-subtle">
+                        <th className="text-left py-2 px-3 text-text-secondary font-medium">Subject</th>
+                        <th className="text-center py-2 px-3 text-text-secondary font-medium w-24">Credits</th>
+                        <th className="text-center py-2 px-3 text-text-secondary font-medium w-24">Grade</th>
+                        <th className="text-center py-2 px-3 text-text-secondary font-medium w-20">Points</th>
+                        <th className="w-10"><span className="sr-only">Actions</span></th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#E7E5E0]">
+                    <tbody className="divide-y divide-border">
                       {sem.subjects.map(sub => (
                         <tr key={sub.id}>
                           <td className="py-2 px-3">
                             <input
                               value={sub.name}
                               onChange={e => updateSubject(sem.id, sub.id, 'name', e.target.value)}
-                              className="bg-transparent text-[#252525] text-xs outline-none w-full font-medium"
+                              aria-label="Course name"
+                              className="bg-transparent text-text-primary text-xs outline-none w-full font-medium"
                             />
                           </td>
                           <td className="py-2 px-3">
@@ -233,6 +232,7 @@ export function CGPAPage() {
                               value={sub.credits}
                               min={1} max={10}
                               onChange={e => updateSubject(sem.id, sub.id, 'credits', parseInt(e.target.value) || 1)}
+                              aria-label={`${sub.name} credits`}
                               className="input py-1 text-xs w-full text-center"
                             />
                           </td>
@@ -240,18 +240,23 @@ export function CGPAPage() {
                             <select
                               value={sub.grade}
                               onChange={e => updateSubject(sem.id, sub.id, 'grade', e.target.value)}
+                              aria-label={`${sub.name} grade`}
                               className="input py-1 text-xs w-full"
                             >
                               {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
                             </select>
                           </td>
                           <td className="py-2 px-3 text-center">
-                            <span className="text-[#5965B3] font-semibold font-mono">
+                            <span className="text-accent-text font-semibold font-mono">
                               {((GRADE_POINTS[sub.grade] || 0) * sub.credits).toFixed(0)}
                             </span>
                           </td>
                           <td className="py-2 px-3">
-                            <button onClick={() => void removeSubject(sem.id, sub.id)} className="text-[#999999] hover:text-[#B45D5D]">
+                            <button
+                              onClick={() => void removeSubject(sem.id, sub.id)}
+                              className="text-text-muted hover:text-error"
+                              aria-label={`Remove ${sub.name}`}
+                            >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </td>
@@ -260,7 +265,7 @@ export function CGPAPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className="mt-3 pt-3 border-t border-[#E7E5E0] flex justify-between text-[11px] text-[#707070] font-mono">
+                <div className="mt-3 pt-3 border-t border-border flex justify-between text-[11px] text-text-secondary font-mono">
                   <span>Total Credits: {sem.subjects.reduce((s, sub) => s + sub.credits, 0)}</span>
                   <span>Total Points: {sem.subjects.reduce((s, sub) => s + (GRADE_POINTS[sub.grade] || 0) * sub.credits, 0)}</span>
                 </div>

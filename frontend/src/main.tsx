@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import App from './App'
+import { applyThemeToDom, useAppStore } from './stores/appStore'
 import './index.css'
 
 const queryClient = new QueryClient({
@@ -16,6 +17,20 @@ const queryClient = new QueryClient({
   },
 })
 
+// Apply persisted or OS-default theme immediately before render
+applyThemeToDom(useAppStore.getState().theme)
+
+// Keep OS prefers-color-scheme in sync when mode is 'system'
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  const handleSchemeChange = () => {
+    if (useAppStore.getState().theme === 'system') {
+      applyThemeToDom('system')
+    }
+  }
+  mediaQuery.addEventListener?.('change', handleSchemeChange)
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
@@ -26,18 +41,19 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           toastOptions={{
             duration: 4000,
             style: {
-              background: '#212529',
-              color: '#f8f9fa',
-              border: '1px solid #343a40',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+              border: '1px solid var(--color-border)',
               borderRadius: '12px',
-              fontSize: '14px',
+              fontSize: '13px',
               fontFamily: 'Inter, sans-serif',
+              boxShadow: 'var(--shadow-md)',
             },
             success: {
-              iconTheme: { primary: '#10b981', secondary: '#fff' },
+              iconTheme: { primary: '#3E7250', secondary: '#FFFFFF' },
             },
             error: {
-              iconTheme: { primary: '#f43f5e', secondary: '#fff' },
+              iconTheme: { primary: '#A64444', secondary: '#FFFFFF' },
             },
           }}
         />

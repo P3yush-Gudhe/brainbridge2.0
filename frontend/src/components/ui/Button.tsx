@@ -20,16 +20,18 @@ export function Button({
   rightIcon,
   children,
   disabled,
+  type = 'button',
   ...props
 }: ButtonProps) {
-  const baseStyles = 'btn inline-flex items-center justify-center rounded-xl font-medium transition-all focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed select-none'
+  const baseStyles =
+    'btn inline-flex items-center justify-center rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed select-none'
 
   const variants = {
-    primary: 'btn-primary bg-[#5965B3] hover:bg-[#4E59A3] text-white shadow-xs',
-    secondary: 'btn-secondary bg-white hover:bg-[#FAF9F6] border border-[#E7E5E0] text-[#252525] hover:border-[#D4D2CD] shadow-xs',
-    outline: 'border border-[#E7E5E0] bg-transparent text-[#252525] hover:bg-[#FAF9F6] hover:border-[#D4D2CD]',
-    ghost: 'btn-ghost text-[#707070] hover:text-[#252525] hover:bg-[#FAF9F6]',
-    danger: 'btn-danger bg-[#B45D5D] hover:bg-[#9E4F4F] text-white shadow-xs',
+    primary: 'btn-primary shadow-xs',
+    secondary: 'btn-secondary bg-surface hover:bg-surface-subtle border border-border text-text-primary hover:border-border-strong shadow-xs',
+    outline: 'border border-border bg-transparent text-text-primary hover:bg-surface-subtle hover:border-border-strong',
+    ghost: 'btn-ghost text-text-secondary hover:text-text-primary hover:bg-surface-secondary',
+    danger: 'bg-[#A64444] hover:bg-[#923939] text-white border border-[#A64444] shadow-xs',
   }
 
   const sizes = {
@@ -41,18 +43,19 @@ export function Button({
 
   return (
     <motion.button
+      type={type}
       whileTap={{ scale: disabled || isLoading ? 1 : 0.98 }}
       className={cn(baseStyles, variants[variant], sizes[size], className)}
       disabled={disabled || isLoading}
       {...(props as unknown as React.ComponentProps<typeof motion.button>)}
     >
       {isLoading ? (
-        <Loader2 className="w-4 h-4 animate-spin" />
+        <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
       ) : (
         <>
-          {leftIcon && <span className="flex-shrink-0">{leftIcon}</span>}
+          {leftIcon && <span className="flex-shrink-0" aria-hidden="true">{leftIcon}</span>}
           {children && <span>{children}</span>}
-          {rightIcon && <span className="flex-shrink-0">{rightIcon}</span>}
+          {rightIcon && <span className="flex-shrink-0" aria-hidden="true">{rightIcon}</span>}
         </>
       )}
     </motion.button>

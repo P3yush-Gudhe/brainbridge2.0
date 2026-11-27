@@ -105,7 +105,7 @@ export function PomodoroPage() {
         setSessions(Number(res.data?.todaySessions) || 0)
         setTotalFocus(Number(res.data?.todayFocusMinutes) || 0)
       } catch {
-        // Non-blocking fallback to 0
+        if (active) toast.error('Failed to load focus session stats')
       }
     })()
     return () => { active = false }
@@ -141,7 +141,9 @@ export function PomodoroPage() {
               void api.post('/pomodoro', { durationMinutes: currentMode.focus })
                 .then(() => refreshSessionUser())
                 .then(() => toast.success(`Recorded ${currentMode.focus}-minute focus session`))
-                .catch(() => {})
+                .catch(() => {
+                  toast.error('Failed to save focus session')
+                })
               if ('Notification' in window && Notification.permission === 'granted') {
                 new Notification('Break time', { body: `Take a ${currentMode.break}-minute break.` })
               }
@@ -161,18 +163,18 @@ export function PomodoroPage() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [running, phase, currentMode, refreshSessionUser])
 
-  const phaseColor = phase === 'focus' ? '#5965B3' : '#5C8A6A'
+  const phaseColor = phase === 'focus' ? 'var(--color-accent)' : 'var(--color-success)'
   const phaseLabel = phase === 'focus' ? 'Focus Session' : 'Break Time'
 
   return (
-    <div className="p-6 md:p-8 max-w-4xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 md:p-8 max-w-4xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-[#252525] tracking-tight">Focus Timer</h1>
-        <p className="text-[#707070] text-sm mt-1">Structured Pomodoro sessions for deep academic study</p>
+        <h1 className="text-2xl font-bold text-text-primary tracking-tight">Focus Timer</h1>
+        <p className="text-text-secondary text-sm mt-1">Structured Pomodoro sessions for deep academic study</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 card p-8 bg-white border-[#E7E5E0] flex flex-col items-center shadow-xs">
+        <div className="lg:col-span-2 card p-6 sm:p-8 bg-surface border-border flex flex-col items-center shadow-xs">
           <div className="flex gap-2 mb-8">
             {MODES.map((m, i) => (
               <button
@@ -180,8 +182,8 @@ export function PomodoroPage() {
                 onClick={() => { setModeIdx(i); setRunning(false) }}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
                   modeIdx === i
-                    ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3]'
-                    : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6] hover:border-[#D4D2CD]'
+                    ? 'bg-accent-light border-accent text-accent-text'
+                    : 'border-border text-text-secondary bg-surface-subtle hover:border-border-strong'
                 }`}
               >
                 {m.label}
@@ -190,8 +192,8 @@ export function PomodoroPage() {
           </div>
 
           <div className="relative w-60 h-60 mb-8">
-            <svg className="w-full h-full -rotate-90" viewBox="0 0 240 240">
-              <circle cx="120" cy="120" r={radius} fill="none" stroke="#F0F0ED" strokeWidth="10" />
+            <svg className="w-full h-full -rotate-90" viewBox="0 0 240 240" aria-hidden="true">
+              <circle cx="120" cy="120" r={radius} fill="none" stroke="var(--color-surface-secondary)" strokeWidth="10" />
               <motion.circle
                 cx="120" cy="120" r={radius} fill="none"
                 stroke={phaseColor}
@@ -204,20 +206,21 @@ export function PomodoroPage() {
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <div className={`text-[11px] font-semibold mb-1 uppercase tracking-wider ${
-                phase === 'focus' ? 'text-[#5965B3]' : 'text-[#5C8A6A]'
+                phase === 'focus' ? 'text-accent-text' : 'text-success'
               }`}>{phaseLabel}</div>
-              <div className="text-4xl font-bold font-mono text-[#252525]">{formatDuration(timeLeft)}</div>
-              <div className="text-xs text-[#707070] mt-1 font-mono">{sessions} sessions completed</div>
+              <div className="text-4xl font-bold font-mono text-text-primary">{formatDuration(timeLeft)}</div>
+              <div className="text-xs text-text-secondary mt-1 font-mono">{sessions} sessions completed</div>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <button onClick={reset} className="btn btn-secondary btn-icon w-10 h-10 rounded-xl" title="Reset">
+            <button onClick={reset} className="btn btn-secondary btn-icon w-10 h-10 rounded-xl" title="Reset" aria-label="Reset timer">
               <RotateCcw className="w-4 h-4" />
             </button>
             <button
               onClick={() => setRunning(r => !r)}
-              className="w-14 h-14 rounded-xl flex items-center justify-center bg-[#5965B3] hover:bg-[#4E59A3] text-white shadow-xs transition-all"
+              aria-label={running ? 'Pause timer' : 'Start timer'}
+              className="w-14 h-14 rounded-xl flex items-center justify-center bg-accent hover:bg-accent-hover text-white shadow-xs transition-all"
             >
               {running ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-0.5" />}
             </button>
@@ -225,26 +228,30 @@ export function PomodoroPage() {
         </div>
 
         <div className="space-y-5">
-          <div className="card p-5 bg-white border-[#E7E5E0]">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-[#707070] mb-3">Today's Summary</h3>
+          <div className="card p-5 bg-surface border-border">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-text-secondary mb-3">Today's Summary</h3>
             <div className="space-y-3 text-xs">
               {[
-                { label: 'Focus time', value: `${totalFocus} min`, color: 'text-[#5965B3]' },
-                { label: 'Completed sessions', value: sessions.toString(), color: 'text-[#5C8A6A]' },
-                { label: 'Breaks taken', value: sessions.toString(), color: 'text-[#B4863A]' },
+                { label: 'Focus time', value: `${totalFocus} min`, color: 'text-accent-text' },
+                { label: 'Completed sessions', value: sessions.toString(), color: 'text-success' },
+                { label: 'Breaks taken', value: sessions.toString(), color: 'text-warning' },
               ].map(s => (
                 <div key={s.label} className="flex items-center justify-between">
-                  <span className="text-[#707070]">{s.label}</span>
+                  <span className="text-text-secondary">{s.label}</span>
                   <span className={`font-bold font-mono ${s.color}`}>{s.value}</span>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="card p-5 bg-white border-[#E7E5E0]">
+          <div className="card p-5 bg-surface border-border">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-[#707070]">Ambient Sounds</h3>
-              <button onClick={() => setSoundMuted(m => !m)} className="text-[#707070] hover:text-[#252525]">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-text-secondary">Ambient Sounds</h3>
+              <button
+                onClick={() => setSoundMuted(m => !m)}
+                className="text-text-secondary hover:text-text-primary"
+                aria-label={soundMuted ? 'Unmute ambient sounds' : 'Mute ambient sounds'}
+              >
                 {soundMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
               </button>
             </div>
@@ -255,8 +262,8 @@ export function PomodoroPage() {
                   onClick={() => setActiveSound(as => as === s.id ? null : s.id)}
                   className={`p-2 rounded-lg text-xs text-center transition-all border ${
                     activeSound === s.id
-                      ? 'bg-[#ECEEF7] border-[#5965B3] text-[#5965B3] font-semibold'
-                      : 'border-[#E7E5E0] text-[#707070] bg-[#FAF9F6] hover:border-[#D4D2CD]'
+                      ? 'bg-accent-light border-accent text-accent-text font-semibold'
+                      : 'border-border text-text-secondary bg-surface-subtle hover:border-border-strong'
                   }`}
                 >
                   {s.label}
@@ -265,9 +272,9 @@ export function PomodoroPage() {
             </div>
           </div>
 
-          <div className="card p-4 bg-[#FAF9F6] border-[#E7E5E0]">
-            <h3 className="text-xs font-semibold text-[#252525] mb-1.5">Study Habits</h3>
-            <ul className="space-y-1 text-xs text-[#707070]">
+          <div className="card p-4 bg-surface-subtle border-border">
+            <h3 className="text-xs font-semibold text-text-primary mb-1.5">Study Habits</h3>
+            <ul className="space-y-1 text-xs text-text-secondary">
               <li>• Eliminate phone distractions</li>
               <li>• Stay hydrated during breaks</li>
               <li>• Keep session goals clear</li>

@@ -1,27 +1,52 @@
 import { Router } from 'express'
-import type { Request, Response } from 'express'
+import type { Response } from 'express'
 import { Type } from '@google/genai'
 import type { GenerateContentResponse } from '@google/genai'
-import { execFile } from 'node:child_process'
-import fs from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
-import crypto from 'node:crypto'
-import { GEMINI_MODEL, getGeminiClient, normalizeGeminiError, parseJsonResponse, withRetry } from './gemini.ts'
+import type { AuthRequest } from '../src/middleware/auth.ts'
+import { getGeminiClient, getGeminiModel, normalizeGeminiError, parseJsonResponse, withRetry } from './gemini.ts'
+import { CodeRunnerError, executeSandboxedCode } from './codeRunner.ts'
+import { handleOcrAnalysis, handlePdfAnalysis } from './uploadRoutes.ts'
+import {
+  aiChatSchema,
+  aiCodeSchema,
+  aiFlashcardsSchema,
+  aiMindMapSchema,
+  aiNotesSchema,
+  aiOcrSchema,
+  aiPdfSchema,
+  aiPlannerSchema,
+  aiQuizSchema,
+  aiYoutubeSchema,
+  validateBody,
+} from './validation.ts'
+import { fetchYouTubeTranscript, YouTubeTranscriptError } from './youtube.ts'
+import { getWeeklySummaryContext } from '../src/db/workspace.ts'
 
 export const aiRouter = Router()
 
 function sendError(res: Response, err: unknown) {
+  if (err instanceof CodeRunnerError) {
+    if (err.retryAfterSeconds) {
+      res.setHeader('Retry-After', String(err.retryAfterSeconds))
+    }
+    res.status(err.status).json({ error: err.message })
+    return
+  }
+  if (err instanceof YouTubeTranscriptError) {
+    res.status(err.status).json({ error: err.message })
+    return
+  }
   const { status, message } = normalizeGeminiError(err)
   res.status(status).json({ error: message })
 }
 
 // 1. Quiz Generator
-aiRouter.post('/quiz', async (req: Request, res: Response) => {
+aiRouter.post('/quiz', validateBody(aiQuizSchema), async (req: AuthRequest, res: Response) => {
   try {
     const ai = getGeminiClient()
     const subject = String(req.body?.subject || 'General Knowledge').trim()
     const topic = String(req.body?.topic || '').trim()
+    const sourceText = String(req.body?.sourceText || '').trim()
     const difficulty = String(req.body?.difficulty || 'medium').trim()
     const type = req.body?.type === 'truefalse' ? 'truefalse' : 'mcq'
     const count = Math.min(20, Math.max(1, Number(req.body?.count) || 5))
@@ -31,11 +56,14 @@ aiRouter.post('/quiz', async (req: Request, res: Response) => {
       type === 'truefalse'
         ? 'Each question must be a True/False question with exactly 2 options: ["True", "False"].'
         : 'Each question must be a multiple-choice question with exactly 4 distinct options.'
+    const promptBody = sourceText
+      ? `Generate ${count} ${difficulty}-difficulty ${type === 'truefalse' ? 'True/False' : 'multiple-choice'} quiz questions grounded in the following study material for "${subject}" ${topicText}.\n\nStudy Material:\n${sourceText.slice(0, 12000)}\n\n${formatInstruction} Provide the 0-based index of the correct option and a clear, concise explanation for each question.`
+      : `Generate ${count} ${difficulty}-difficulty ${type === 'truefalse' ? 'True/False' : 'multiple-choice'} quiz questions for the subject "${subject}" ${topicText}. ${formatInstruction} Provide the 0-based index of the correct option and a clear, concise explanation for each question.`
 
     const response = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Generate ${count} ${difficulty}-difficulty ${type === 'truefalse' ? 'True/False' : 'multiple-choice'} quiz questions for the subject "${subject}" ${topicText}. ${formatInstruction} Provide the 0-based index of the correct option and a clear, concise explanation for each question.`,
+        model: getGeminiModel(),
+        contents: promptBody,
         config: {
           systemInstruction:
             'You are an expert academic quiz creator. Produce accurate, unambiguous questions with clear explanations and zero duplicate questions.',
@@ -104,7 +132,7 @@ aiRouter.post('/quiz', async (req: Request, res: Response) => {
 })
 
 // 2. AI Chat & Tutor & Voice (supports SSE streaming or JSON)
-aiRouter.post('/chat', async (req: Request, res: Response) => {
+aiRouter.post('/chat', validateBody(aiChatSchema), async (req: AuthRequest, res: Response) => {
   try {
     const ai = getGeminiClient()
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : []
@@ -145,7 +173,7 @@ aiRouter.post('/chat', async (req: Request, res: Response) => {
     const history = rawHistory
 
     const chat = ai.chats.create({
-      model: GEMINI_MODEL,
+      model: getGeminiModel(),
       history,
       config: { systemInstruction },
     })
@@ -181,7 +209,7 @@ aiRouter.post('/chat', async (req: Request, res: Response) => {
 })
 
 // 3. Flashcard Generator
-aiRouter.post('/flashcards', async (req: Request, res: Response) => {
+aiRouter.post('/flashcards', validateBody(aiFlashcardsSchema), async (req: AuthRequest, res: Response) => {
   try {
     const ai = getGeminiClient()
     const topic = String(req.body?.topic || '').trim()
@@ -200,7 +228,7 @@ aiRouter.post('/flashcards', async (req: Request, res: Response) => {
 
     const response = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: getGeminiModel(),
         contents: prompt,
         config: {
           systemInstruction:
@@ -232,153 +260,39 @@ aiRouter.post('/flashcards', async (req: Request, res: Response) => {
   }
 })
 
-// 4. PDF Document Reader (process + Q&A)
-aiRouter.post('/pdf', async (req: Request, res: Response) => {
+// 4. PDF Document Reader (process + Q&A citing page numbers)
+aiRouter.post('/pdf', validateBody(aiPdfSchema), handlePdfAnalysis)
+
+// 5. YouTube Learning Analyzer (fetches real captions/transcript first, then summarizes via Gemini)
+aiRouter.post('/youtube', validateBody(aiYoutubeSchema), async (req: AuthRequest, res: Response) => {
   try {
+    const url = String(req.body.url || '').trim()
+
+    const transcriptData = await fetchYouTubeTranscript(url)
     const ai = getGeminiClient()
-    const action = req.body?.action === 'chat' ? 'chat' : 'process'
-    const fileBase64 = String(req.body?.fileBase64 || '').trim()
-    const fileName = String(req.body?.fileName || 'document.pdf').trim()
-
-    if (!fileBase64) {
-      res.status(400).json({ error: 'PDF content is required.' })
-      return
-    }
-
-    const pdfPart = {
-      inlineData: {
-        mimeType: 'application/pdf',
-        data: fileBase64,
-      },
-    }
-
-    if (action === 'chat') {
-      const question = String(req.body?.question || '').trim()
-      if (!question) {
-        res.status(400).json({ error: 'Question is required.' })
-        return
-      }
-      const response = await withRetry(() =>
-        ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents: {
-            parts: [
-              pdfPart,
-              {
-                text: `Answer the student's question based strictly on the attached PDF ("${fileName}"). Be clear, accurate, and cite relevant sections or concepts from the document.\n\nQuestion: ${question}`,
-              },
-            ],
-          },
-        })
-      )
-      res.json({ answer: response.text ?? '' })
-      return
-    }
-
-    const response = await withRetry(() =>
-      ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: {
-          parts: [
-            pdfPart,
-            {
-              text: `Analyze the attached PDF ("${fileName}") and generate:\n1. A well-structured Markdown summary with headings, bullet points, and key formulas.\n2. 6-10 concise key points.\n3. 5 multiple-choice quiz questions based on the document.\n4. 6 study flashcards (front and back) from the document's core definitions and ideas.`,
-            },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              summary: { type: Type.STRING },
-              keyPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
-              quiz: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    q: { type: Type.STRING },
-                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    answer: { type: Type.INTEGER },
-                  },
-                  required: ['q', 'options', 'answer'],
-                },
-              },
-              flashcards: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    front: { type: Type.STRING },
-                    back: { type: Type.STRING },
-                  },
-                  required: ['front', 'back'],
-                },
-              },
-            },
-            required: ['summary', 'keyPoints', 'quiz', 'flashcards'],
-          },
-        },
-      })
-    )
-
-    const parsed = parseJsonResponse<{
-      summary?: string
-      keyPoints?: string[]
-      quiz?: Array<{ q: string; options: string[]; answer: number }>
-      flashcards?: Array<{ front: string; back: string }>
-    }>(response.text, {})
-
-    res.json({
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-      keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints : [],
-      quiz: Array.isArray(parsed.quiz) ? parsed.quiz : [],
-      flashcards: Array.isArray(parsed.flashcards) ? parsed.flashcards : [],
-    })
-  } catch (err) {
-    sendError(res, err)
-  }
-})
-
-// 5. YouTube Learning Analyzer (uses urlContext + googleSearch grounding, then structured schema)
-aiRouter.post('/youtube', async (req: Request, res: Response) => {
-  try {
-    const ai = getGeminiClient()
-    const url = String(req.body?.url || '').trim()
-    if (!url) {
-      res.status(400).json({ error: 'Please provide a YouTube video URL.' })
-      return
-    }
-
-    const grounded = await withRetry(() =>
-      ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Analyze this educational YouTube video URL and extract its title, channel/creator, approximate duration, comprehensive study summary, key notes/principles, timestamped topic breakdown or transcript highlights, 4 quiz questions, and 6 flashcards:\n${url}`,
-        config: {
-          tools: [{ urlContext: {} }, { googleSearch: {} }],
-        },
-      })
-    )
-
-    const groundedText = grounded.text ?? ''
-    if (!groundedText.trim()) {
-      res.status(422).json({ error: 'Could not extract content from this YouTube URL. Please verify the link is public.' })
-      return
-    }
 
     const structured = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Convert the following video analysis into clean structured JSON:\n\n${groundedText}`,
+        model: getGeminiModel(),
+        contents: `You are an expert academic study assistant. Analyze ONLY the real YouTube lecture transcript below and generate a structured study guide.
+
+Video Title: ${transcriptData.title}
+Channel: ${transcriptData.channel}
+Duration: ${transcriptData.duration || 'Unknown'}
+
+Transcript:
+${transcriptData.fullText.slice(0, 28000)}
+
+Produce:
+1. A comprehensive Markdown study summary highlighting core takeaways and equations.
+2. 3-5 structured note sections with headings and concise bullet points.
+3. 4 multiple-choice quiz questions testing comprehension of the transcript (with 4 options each and 0-based answer index).
+4. 6 active-recall flashcards (front/back) grounded in this lecture.`,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              title: { type: Type.STRING },
-              duration: { type: Type.STRING },
-              channel: { type: Type.STRING },
               summary: { type: Type.STRING },
               notes: {
                 type: Type.ARRAY,
@@ -389,17 +303,6 @@ aiRouter.post('/youtube', async (req: Request, res: Response) => {
                     bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
                   },
                   required: ['heading', 'bullets'],
-                },
-              },
-              transcript: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    time: { type: Type.STRING },
-                    text: { type: Type.STRING },
-                  },
-                  required: ['time', 'text'],
                 },
               },
               quiz: {
@@ -426,30 +329,26 @@ aiRouter.post('/youtube', async (req: Request, res: Response) => {
                 },
               },
             },
-            required: ['title', 'duration', 'channel', 'summary', 'notes', 'transcript', 'quiz', 'flashcards'],
+            required: ['summary', 'notes', 'quiz', 'flashcards'],
           },
         },
       })
     )
 
     const parsed = parseJsonResponse<{
-      title?: string
-      duration?: string
-      channel?: string
       summary?: string
       notes?: Array<{ heading: string; bullets: string[] }>
-      transcript?: Array<{ time: string; text: string }>
       quiz?: Array<{ q: string; opts: string[]; ans: number }>
       flashcards?: Array<{ front: string; back: string }>
     }>(structured.text, {})
 
     res.json({
-      title: parsed.title || 'YouTube Study Guide',
-      duration: parsed.duration || '',
-      channel: parsed.channel || '',
-      summary: parsed.summary || groundedText,
+      title: transcriptData.title,
+      duration: transcriptData.duration,
+      channel: transcriptData.channel,
+      summary: parsed.summary || 'Summary generated from transcript.',
       notes: Array.isArray(parsed.notes) ? parsed.notes : [],
-      transcript: Array.isArray(parsed.transcript) ? parsed.transcript : [],
+      transcript: transcriptData.segments.map((s) => ({ time: s.time, text: s.text })),
       quiz: Array.isArray(parsed.quiz) ? parsed.quiz : [],
       flashcards: Array.isArray(parsed.flashcards) ? parsed.flashcards : [],
     })
@@ -459,63 +358,10 @@ aiRouter.post('/youtube', async (req: Request, res: Response) => {
 })
 
 // 6. OCR Text Extractor & AI Actions
-aiRouter.post('/ocr', async (req: Request, res: Response) => {
-  try {
-    const ai = getGeminiClient()
-    const action = String(req.body?.action || 'extract')
-
-    if (action === 'extract') {
-      const imageBase64 = String(req.body?.imageBase64 || '').trim()
-      const mimeType = String(req.body?.mimeType || 'image/png').trim()
-      if (!imageBase64) {
-        res.status(400).json({ error: 'Image data is required for OCR.' })
-        return
-      }
-      const response = await withRetry(() =>
-        ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents: {
-            parts: [
-              { inlineData: { mimeType, data: imageBase64 } },
-              {
-                text: 'Extract all visible text, headings, bullet points, and mathematical equations accurately from this image. Preserve line breaks and structure cleanly. Return only the extracted text.',
-              },
-            ],
-          },
-        })
-      )
-      res.json({ text: (response.text ?? '').trim() })
-      return
-    }
-
-    const text = String(req.body?.text || '').trim()
-    const targetLanguage = String(req.body?.targetLanguage || 'Spanish').trim()
-    if (!text) {
-      res.status(400).json({ error: 'Extracted text is required.' })
-      return
-    }
-
-    const prompts: Record<string, string> = {
-      summarize: `Provide a concise, well-structured summary of the following extracted study text:\n\n${text}`,
-      translate: `Translate the following study text accurately into ${targetLanguage}, preserving formatting and equations:\n\n${text}`,
-      notes: `Convert the following extracted text into clean, organized Markdown study notes with key takeaways and definitions:\n\n${text}`,
-    }
-
-    const prompt = prompts[action] || prompts.notes
-    const response = await withRetry(() =>
-      ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: prompt,
-      })
-    )
-    res.json({ result: (response.text ?? '').trim() })
-  } catch (err) {
-    sendError(res, err)
-  }
-})
+aiRouter.post('/ocr', validateBody(aiOcrSchema), handleOcrAnalysis)
 
 // 7. Notes AI Assistant
-aiRouter.post('/notes', async (req: Request, res: Response) => {
+aiRouter.post('/notes', validateBody(aiNotesSchema), async (req: AuthRequest, res: Response) => {
   try {
     const ai = getGeminiClient()
     const action = String(req.body?.action || 'summarize')
@@ -554,7 +400,7 @@ aiRouter.post('/notes', async (req: Request, res: Response) => {
 
     const response = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: getGeminiModel(),
         contents: prompt,
       })
     )
@@ -566,7 +412,7 @@ aiRouter.post('/notes', async (req: Request, res: Response) => {
 })
 
 // 8. Mind Map Generator
-aiRouter.post('/mindmap', async (req: Request, res: Response) => {
+aiRouter.post('/mindmap', validateBody(aiMindMapSchema), async (req: AuthRequest, res: Response) => {
   try {
     const ai = getGeminiClient()
     const topic = String(req.body?.topic || '').trim()
@@ -577,7 +423,7 @@ aiRouter.post('/mindmap', async (req: Request, res: Response) => {
 
     const response = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: getGeminiModel(),
         contents: `Create a structured academic concept mind map for the topic "${topic}". Include 4 main branches, each with 4 concise, high-value subtopics.`,
         config: {
           responseMimeType: 'application/json',
@@ -616,25 +462,8 @@ aiRouter.post('/mindmap', async (req: Request, res: Response) => {
   }
 })
 
-// 9. Code Playground (real execution for Python/JS/TS/C/C++ + Gemini Explain/Debug/Optimize)
-function runProcess(cmd: string, args: string[], timeoutMs = 4000): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 256 * 1024 }, (error, stdout, stderr) => {
-      if (error && 'killed' in error && error.killed) {
-        resolve({ stdout, stderr: `${stderr}\nExecution timed out after ${timeoutMs / 1000}s`, exitCode: 124 })
-        return
-      }
-      const exitCode = typeof (error as NodeJS.ErrnoException | null)?.code === 'number'
-        ? ((error as unknown as { code: number }).code ?? 1)
-        : error
-          ? 1
-          : 0
-      resolve({ stdout: stdout || '', stderr: stderr || '', exitCode })
-    })
-  })
-}
-
-aiRouter.post('/code', async (req: Request, res: Response) => {
+// 9. Code Playground (isolated sandboxed execution + Gemini Explain/Debug/Optimize)
+aiRouter.post('/code', validateBody(aiCodeSchema), async (req: AuthRequest, res: Response) => {
   try {
     const action = String(req.body?.action || 'run')
     const language = String(req.body?.language || 'python').toLowerCase()
@@ -646,66 +475,15 @@ aiRouter.post('/code', async (req: Request, res: Response) => {
     }
 
     if (action === 'run') {
-      const tmpDir = path.join(os.tmpdir(), `studymate-code-${crypto.randomBytes(6).toString('hex')}`)
-      await fs.mkdir(tmpDir, { recursive: true })
-      try {
-        let result: { stdout: string; stderr: string; exitCode: number } | null = null
-
-        if (language === 'python') {
-          const file = path.join(tmpDir, 'main.py')
-          await fs.writeFile(file, code)
-          result = await runProcess('python3', [file])
-        } else if (language === 'javascript') {
-          const file = path.join(tmpDir, 'main.mjs')
-          await fs.writeFile(file, code)
-          result = await runProcess('node', [file])
-        } else if (language === 'typescript') {
-          const file = path.join(tmpDir, 'main.ts')
-          await fs.writeFile(file, code)
-          result = await runProcess('node', ['--experimental-strip-types', file])
-        } else if (language === 'c') {
-          const src = path.join(tmpDir, 'main.c')
-          const bin = path.join(tmpDir, 'main')
-          await fs.writeFile(src, code)
-          const compile = await runProcess('gcc', [src, '-o', bin])
-          if (compile.exitCode !== 0) {
-            result = compile
-          } else {
-            result = await runProcess(bin, [])
-          }
-        } else if (language === 'cpp') {
-          const src = path.join(tmpDir, 'main.cpp')
-          const bin = path.join(tmpDir, 'main')
-          await fs.writeFile(src, code)
-          const compile = await runProcess('g++', [src, '-std=c++17', '-o', bin])
-          if (compile.exitCode !== 0) {
-            result = compile
-          } else {
-            result = await runProcess(bin, [])
-          }
-        }
-
-        if (result) {
-          const combined = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join('\n\n')
-          res.json({
-            output: `${combined || '(No output)'}\n\nProcess finished with exit code ${result.exitCode}`,
-          })
-          return
-        }
-
-        // Java fallback using Gemini trace since JDK is not installed in container
-        const ai = getGeminiClient()
-        const response = await withRetry(() =>
-          ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: `Trace and show the exact console stdout (and any compile/runtime errors if present) for this ${language} program. Return only the program output:\n\n\`\`\`${language}\n${code}\n\`\`\``,
-          })
-        )
-        res.json({ output: (response.text ?? '').trim() })
-        return
-      } finally {
-        await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-      }
+      const userKey = req.dbUser?.uid || req.user?.uid || req.ip || 'anonymous'
+      const result = await executeSandboxedCode(userKey, language, code)
+      const combined = [result.stdout.trimEnd(), result.stderr.trimEnd()].filter(Boolean).join('\n\n')
+      res.json({
+        output: `${combined || '(No output)'}\n\n[${result.driver}] Process finished with exit code ${result.exitCode}`,
+        exitCode: result.exitCode,
+        driver: result.driver,
+      })
+      return
     }
 
     const ai = getGeminiClient()
@@ -717,7 +495,7 @@ aiRouter.post('/code', async (req: Request, res: Response) => {
 
     const response = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: getGeminiModel(),
         contents: `${actionInstructions[action] || actionInstructions.explain}\n\n\`\`\`${language}\n${code}\n\`\`\``,
       })
     )
@@ -728,16 +506,17 @@ aiRouter.post('/code', async (req: Request, res: Response) => {
 })
 
 // 10. Study Planner AI Schedule Generator
-aiRouter.post('/planner', async (req: Request, res: Response) => {
+aiRouter.post('/planner', validateBody(aiPlannerSchema), async (req: AuthRequest, res: Response) => {
   try {
     const ai = getGeminiClient()
     const exams = Array.isArray(req.body?.exams) ? req.body.exams : []
     const existingTasks = Array.isArray(req.body?.existingTasks) ? req.body.existingTasks : []
 
+    const todayIso = new Date().toISOString().slice(0, 10)
     const response = await withRetry(() =>
       ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: `Given these upcoming exams:\n${JSON.stringify(exams)}\nand current tasks:\n${JSON.stringify(existingTasks)}\n\nGenerate 5 high-impact study tasks scheduled over the next 0 to 6 days (dateOffsetDays 0 = today) and a brief personalized recommendation (1-2 sentences).`,
+        model: getGeminiModel(),
+        contents: `Today is ${todayIso}. Given these upcoming exams (prioritize exams with earlier dates and higher hoursNeeded):\n${JSON.stringify(exams)}\nand current tasks:\n${JSON.stringify(existingTasks)}\n\nGenerate 5 to 7 high-impact, realistic study tasks scheduled across day offsets 0 to 6 (dateOffsetDays 0 = today, 1 = tomorrow, etc., weighted heavily toward the nearest exam deadlines) and a concise recommendation (1-2 sentences).`,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -771,6 +550,34 @@ aiRouter.post('/planner', async (req: Request, res: Response) => {
     res.json({
       recommendation: parsed.recommendation || '',
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
+    })
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+// 11. Weekly AI Study Coach Summary
+aiRouter.post('/weekly-summary', async (req: AuthRequest, res: Response) => {
+  try {
+    const ai = getGeminiClient()
+    const stats = await getWeeklySummaryContext(req.dbUser!.id)
+
+    const response = await withRetry(() =>
+      ai.models.generateContent({
+        model: getGeminiModel(),
+        contents: `You are StudyMate's supportive academic coach. Review this student's real past-7-days activity metrics and write a short, motivating Markdown weekly summary (under 180 words) with:
+1. Highlights of what went well
+2. Any weak quiz topics or due flashcards that need attention
+3. Three specific, actionable goals for the coming week.
+
+Metrics:
+${JSON.stringify(stats, null, 2)}`,
+      })
+    )
+
+    res.json({
+      summary: (response.text ?? '').trim(),
+      metrics: stats,
     })
   } catch (err) {
     sendError(res, err)

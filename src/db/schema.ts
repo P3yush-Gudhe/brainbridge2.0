@@ -44,6 +44,8 @@ export const flashcardDecks = pgTable('flashcard_decks', {
     .notNull(),
   name: text('name').notNull(),
   subject: text('subject').notNull().default('General'),
+  shareCode: text('share_code'),
+  isPublic: boolean('is_public').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
 
@@ -59,6 +61,10 @@ export const flashcards = pgTable('flashcards', {
   back: text('back').notNull(),
   difficulty: text('difficulty'),
   reviewCount: integer('review_count').notNull().default(0),
+  easeFactor: integer('ease_factor').notNull().default(250),
+  intervalDays: integer('interval_days').notNull().default(0),
+  repetitions: integer('repetitions').notNull().default(0),
+  lastReviewedAt: timestamp('last_reviewed_at'),
   dueDate: timestamp('due_date').defaultNow().notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
@@ -87,6 +93,15 @@ export const studyTasks = pgTable('study_tasks', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
 
+export interface MissedQuizQuestionRecord {
+  question: string
+  options: string[]
+  correct: number
+  selected: number
+  explanation?: string
+  topic?: string
+}
+
 export const quizAttempts = pgTable('quiz_attempts', {
   id: serial('id').primaryKey(),
   userId: integer('user_id')
@@ -97,6 +112,7 @@ export const quizAttempts = pgTable('quiz_attempts', {
   difficulty: text('difficulty').notNull(),
   score: integer('score').notNull(),
   totalQuestions: integer('total_questions').notNull(),
+  missedQuestions: jsonb('missed_questions').$type<MissedQuizQuestionRecord[]>().notNull().default([]),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 })
 
@@ -171,7 +187,85 @@ export const pomodoroSessions = pgTable('pomodoro_sessions', {
   completedAt: timestamp('completed_at').defaultNow().notNull(),
 })
 
-export const usersRelations = relations(users, ({ many }) => ({
+export interface PdfHighlightRecord {
+  id: string
+  page: number
+  text: string
+  color: string
+  createdAt: string
+}
+
+export const savedPdfs = pgTable('saved_pdfs', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  fileName: text('file_name').notNull(),
+  pageCount: integer('page_count').notNull().default(1),
+  extractedText: text('extracted_text').notNull().default(''),
+  summary: text('summary').notNull().default(''),
+  keyPoints: jsonb('key_points').$type<string[]>().notNull().default([]),
+  highlights: jsonb('highlights').$type<PdfHighlightRecord[]>().notNull().default([]),
+  notes: text('notes').notNull().default(''),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
+
+export interface MindMapBranchRecord {
+  title: string
+  children: string[]
+}
+
+export const mindMaps = pgTable('mind_maps', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  title: text('title').notNull(),
+  root: text('root').notNull(),
+  branches: jsonb('branches').$type<MindMapBranchRecord[]>().notNull().default([]),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
+
+export const xpEvents = pgTable('xp_events', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  source: text('source').notNull(),
+  points: integer('points').notNull(),
+  description: text('description').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
+export const userAchievements = pgTable('user_achievements', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+  achievementKey: text('achievement_key').notNull(),
+  title: text('title').notNull(),
+  xpReward: integer('xp_reward').notNull().default(50),
+  unlockedAt: timestamp('unlocked_at').defaultNow().notNull(),
+})
+
+export const userSettings = pgTable('user_settings', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull()
+    .unique(),
+  theme: text('theme').notNull().default('system'),
+  examReminders: boolean('exam_reminders').notNull().default(true),
+  streakAlerts: boolean('streak_alerts').notNull().default(true),
+  weeklySummary: boolean('weekly_summary').notNull().default(true),
+  leaderboardVisible: boolean('leaderboard_visible').notNull().default(false),
+  dailyGoalMinutes: integer('daily_goal_minutes').notNull().default(60),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+})
+
+export const usersRelations = relations(users, ({ one, many }) => ({
   notes: many(notes),
   flashcardDecks: many(flashcardDecks),
   studyExams: many(studyExams),
@@ -181,6 +275,11 @@ export const usersRelations = relations(users, ({ many }) => ({
   attendanceSubjects: many(attendanceSubjects),
   cgpaSemesters: many(cgpaSemesters),
   pomodoroSessions: many(pomodoroSessions),
+  savedPdfs: many(savedPdfs),
+  mindMaps: many(mindMaps),
+  xpEvents: many(xpEvents),
+  userAchievements: many(userAchievements),
+  settings: one(userSettings),
 }))
 
 export const notesRelations = relations(notes, ({ one }) => ({

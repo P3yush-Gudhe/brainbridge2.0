@@ -1,6 +1,25 @@
 import { GoogleGenAI } from '@google/genai'
 
-export const GEMINI_MODEL = 'gemini-4-hydrogen'
+const DEFAULT_GEMINI_MODEL = 'gemini-4-hydrogen'
+
+const DEPRECATED_MODELS = new Set([
+  'gemini-pro',
+  'gemini-pro-vision',
+  'gemini-1.0-pro',
+  'gemini-1.5-pro',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-pro',
+])
+
+export function getGeminiModel(): string {
+  const configured = process.env.GEMINI_MODEL?.trim()
+  return configured || DEFAULT_GEMINI_MODEL
+}
+
+export const GEMINI_MODEL = getGeminiModel()
 
 export class GeminiError extends Error {
   status: number
@@ -15,7 +34,7 @@ export function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY?.trim()
   if (!apiKey) {
     throw new GeminiError(
-      'Gemini API key is not configured. Please add GEMINI_API_KEY in Settings > Secrets.',
+      'Gemini API key is not configured. Set GEMINI_API_KEY on the server to enable AI features.',
       503
     )
   }
@@ -30,6 +49,39 @@ export function getGeminiClient(): GoogleGenAI {
   })
 }
 
+export async function validateGeminiConfig(): Promise<{ ok: boolean; model: string; reason?: string }> {
+  const model = getGeminiModel()
+  const lowerModel = model.toLowerCase()
+
+  if (
+    DEPRECATED_MODELS.has(lowerModel) ||
+    lowerModel.startsWith('gemini-1.') ||
+    lowerModel.startsWith('gemini-2.0')
+  ) {
+    const reason = `Configured GEMINI_MODEL "${model}" is deprecated or unsupported. Update GEMINI_MODEL in .env to a current model such as "${DEFAULT_GEMINI_MODEL}".`
+    console.error(`[Gemini Startup Check] ERROR: ${reason}`)
+    return { ok: false, model, reason }
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY?.trim()
+  if (!apiKey) {
+    const reason = `GEMINI_API_KEY is missing. AI endpoints will return 503 until GEMINI_API_KEY is configured (model configured: "${model}").`
+    console.warn(`[Gemini Startup Check] WARNING: ${reason}`)
+    return { ok: false, model, reason }
+  }
+
+  try {
+    const ai = getGeminiClient()
+    await ai.models.get({ model })
+    console.log(`[Gemini Startup Check] OK: Verified model "${model}" with configured API key.`)
+    return { ok: true, model }
+  } catch (err) {
+    const normalized = normalizeGeminiError(err)
+    console.error(`[Gemini Startup Check] ERROR (${normalized.status}): ${normalized.message} (model: "${model}")`)
+    return { ok: false, model, reason: normalized.message }
+  }
+}
+
 export function normalizeGeminiError(err: unknown): { status: number; message: string } {
   if (err instanceof GeminiError) {
     return { status: err.status, message: err.message }
@@ -41,25 +93,25 @@ export function normalizeGeminiError(err: unknown): { status: number; message: s
   if (lower.includes('api_key_invalid') || lower.includes('api key not valid') || lower.includes('invalid api key')) {
     return {
       status: 400,
-      message: 'Your Gemini API key appears invalid. Please check GEMINI_API_KEY in Settings > Secrets.',
+      message: 'Configured Gemini API key appears invalid. Please verify GEMINI_API_KEY on the server.',
     }
   }
   if (lower.includes('permission_denied') || lower.includes('403')) {
     return {
       status: 403,
-      message: 'Permission denied by Gemini API. Please verify your API key in Settings > Secrets.',
+      message: 'Permission denied by Gemini API. Please verify your server API key permissions.',
     }
   }
   if (lower.includes('resource_exhausted') || lower.includes('429') || lower.includes('quota')) {
     return {
       status: 429,
-      message: 'Gemini API rate limit or quota reached. Please wait a moment or check your billing/quota in Settings > Secrets.',
+      message: 'Gemini API rate limit or quota reached. Please wait a moment and try again.',
     }
   }
   if (lower.includes('not_found') || lower.includes('404')) {
     return {
       status: 404,
-      message: `Requested Gemini model was not found: ${rawMsg}`,
+      message: `Requested Gemini model ("${getGeminiModel()}") was not found.`,
     }
   }
 

@@ -54,7 +54,7 @@ export function OCRScannerPage() {
     setProcessing(true)
     setAiError(null)
     try {
-      const response = await api.post('/ai/ocr', {
+      const response = await api.post('/uploads/image', {
         action: 'extract',
         imageBase64: imageData.base64,
         mimeType: imageData.mimeType,
@@ -94,26 +94,38 @@ export function OCRScannerPage() {
   }
 
   return (
-    <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 md:p-8 max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-[#252525] tracking-tight">OCR Text Extractor</h1>
-        <p className="text-[#707070] text-sm mt-1">Extract text from textbook pages, handwritten notes, or images</p>
+        <h1 className="text-2xl font-bold text-text-primary tracking-tight">OCR Text Extractor</h1>
+        <p className="text-text-secondary text-sm mt-1">Extract text from textbook pages, handwritten notes, or images</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div>
           {!imageUrl ? (
-            <div onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }} onDragOver={e => e.preventDefault()} onClick={() => fileRef.current?.click()}
-              className="border-2 border-dashed border-[#E7E5E0] bg-white rounded-2xl p-12 text-center cursor-pointer hover:border-[#5965B3] hover:bg-[#FAF9F6] transition-all">
-              <Upload className="w-8 h-8 text-[#707070] mx-auto mb-3" />
-              <h3 className="font-semibold text-sm text-[#252525] mb-1">Drop image here</h3>
-              <p className="text-xs text-[#707070]">PNG, JPG, WEBP formats supported</p>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label="Upload an image to extract text"
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileRef.current?.click() }}
+              onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f) }}
+              onDragOver={e => e.preventDefault()}
+              onClick={() => fileRef.current?.click()}
+              className="border-2 border-dashed border-border bg-surface rounded-2xl p-12 text-center cursor-pointer hover:border-accent hover:bg-surface-subtle transition-all"
+            >
+              <Upload className="w-8 h-8 text-text-secondary mx-auto mb-3" />
+              <h3 className="font-semibold text-sm text-text-primary mb-1">Drop image here</h3>
+              <p className="text-xs text-text-secondary">PNG, JPG, WEBP formats supported</p>
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
             </div>
           ) : (
             <div className="relative">
-              <img src={imageUrl} alt="Uploaded" className="w-full rounded-xl border border-[#E7E5E0]" />
-              <button onClick={() => { setImageUrl(null); setImageData(null); setExtractedText(''); setAiText('') }} className="absolute top-2.5 right-2.5 w-7 h-7 rounded-lg bg-white/90 border border-[#E7E5E0] flex items-center justify-center text-[#707070] hover:text-[#252525]">
+              <img src={imageUrl} alt="Uploaded study page for OCR extraction" className="w-full rounded-xl border border-border" />
+              <button
+                onClick={() => { setImageUrl(null); setImageData(null); setExtractedText(''); setAiText('') }}
+                aria-label="Remove uploaded image"
+                className="absolute top-2.5 right-2.5 w-7 h-7 rounded-lg bg-surface/90 border border-border flex items-center justify-center text-text-secondary hover:text-text-primary"
+              >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -123,43 +135,47 @@ export function OCRScannerPage() {
 
         <div className="space-y-4">
           {aiError && (
-            <div className="p-4 rounded-xl bg-[#FBEFEF] border border-[#B45D5D]/30 text-xs text-[#B45D5D] flex items-start gap-2.5">
+            <div className="p-4 rounded-xl bg-error-light border border-error/30 text-xs text-error flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>{aiError}</span>
             </div>
           )}
           {extractedText ? (
             <>
-              <Card className="p-5 bg-white border-[#E7E5E0]">
+              <Card className="p-5 bg-surface border-border">
                 <CardHeader className="mb-2">
                   <CardTitle>Extracted Text</CardTitle>
-                  <button onClick={() => { navigator.clipboard.writeText(extractedText); setCopied(true); setTimeout(() => setCopied(false), 2000) }} className={cn('btn-icon-sm btn-ghost', copied ? 'text-[#5C8A6A]' : 'text-[#707070]')}>
+                  <button
+                    onClick={() => { void navigator.clipboard.writeText(extractedText); setCopied(true); setTimeout(() => setCopied(false), 2000) }}
+                    className={cn('btn-icon-sm btn-ghost', copied ? 'text-success' : 'text-text-secondary')}
+                    aria-label="Copy extracted text"
+                  >
                     {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </CardHeader>
-                <pre className="whitespace-pre-wrap text-xs text-[#252525] leading-relaxed font-mono">{extractedText}</pre>
+                <pre className="whitespace-pre-wrap text-xs text-text-primary leading-relaxed font-mono">{extractedText}</pre>
               </Card>
 
               <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => handleAI('summarize')} disabled={aiLoading} className="flex items-center justify-center gap-1.5 p-3 rounded-lg bg-white border border-[#E7E5E0] text-[#5965B3] text-xs font-semibold hover:bg-[#ECEEF7] transition-all disabled:opacity-50">
+                <button onClick={() => handleAI('summarize')} disabled={aiLoading} className="flex items-center justify-center gap-1.5 p-3 rounded-lg bg-surface border border-border text-accent-text text-xs font-semibold hover:bg-accent-light transition-all disabled:opacity-50">
                   <Brain className="w-3.5 h-3.5" /> Summarize
                 </button>
-                <button onClick={() => handleAI('translate')} disabled={aiLoading} className="flex items-center justify-center gap-1.5 p-3 rounded-lg bg-white border border-[#E7E5E0] text-[#5965B3] text-xs font-semibold hover:bg-[#ECEEF7] transition-all disabled:opacity-50">
+                <button onClick={() => handleAI('translate')} disabled={aiLoading} className="flex items-center justify-center gap-1.5 p-3 rounded-lg bg-surface border border-border text-accent-text text-xs font-semibold hover:bg-accent-light transition-all disabled:opacity-50">
                   <Languages className="w-3.5 h-3.5" /> Translate
                 </button>
-                <button onClick={() => handleAI('notes')} disabled={aiLoading} className="flex items-center justify-center gap-1.5 p-3 rounded-lg bg-white border border-[#E7E5E0] text-[#5965B3] text-xs font-semibold hover:bg-[#ECEEF7] transition-all disabled:opacity-50">
+                <button onClick={() => handleAI('notes')} disabled={aiLoading} className="flex items-center justify-center gap-1.5 p-3 rounded-lg bg-surface border border-border text-accent-text text-xs font-semibold hover:bg-accent-light transition-all disabled:opacity-50">
                   <Wand2 className="w-3.5 h-3.5" /> Gen notes
                 </button>
               </div>
 
               {(aiText || aiLoading) && (
-                <Card className="p-5 bg-white border-[#E7E5E0]">
+                <Card className="p-5 bg-surface border-border">
                   {aiLoading ? (
-                    <div className="flex items-center gap-2 text-[#707070] text-xs">
-                      <Loader2 className="w-4 h-4 animate-spin text-[#5965B3]" /> Processing...
+                    <div className="flex items-center gap-2 text-text-secondary text-xs">
+                      <Loader2 className="w-4 h-4 animate-spin text-accent-text" /> Processing...
                     </div>
                   ) : (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="prose-studymate text-xs text-[#252525] leading-relaxed">
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="prose-studymate text-xs text-text-primary leading-relaxed">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>{aiText}</ReactMarkdown>
                     </motion.div>
                   )}
@@ -167,8 +183,8 @@ export function OCRScannerPage() {
               )}
             </>
           ) : (
-            <div className="flex flex-col items-center justify-center h-56 text-[#999999] border border-[#E7E5E0] rounded-xl bg-white">
-              <ScanLine className="w-8 h-8 mb-2 opacity-40 text-[#707070]" />
+            <div className="flex flex-col items-center justify-center h-56 text-text-muted border border-border rounded-xl bg-surface">
+              <ScanLine className="w-8 h-8 mb-2 opacity-40 text-text-secondary" />
               <p className="text-xs">Upload an image to extract text</p>
             </div>
           )}

@@ -1,5 +1,7 @@
+import crypto from 'node:crypto'
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm'
 import { db } from './index.ts'
+import { calculateSm2, type Sm2Rating } from '../lib/sm2.ts'
 import {
   attendanceSubjects,
   cgpaCourses,
@@ -8,12 +10,20 @@ import {
   chatMessages,
   flashcardDecks,
   flashcards,
+  mindMaps,
   notes,
   pomodoroSessions,
   quizAttempts,
+  savedPdfs,
   studyExams,
   studyTasks,
+  userAchievements,
+  userSettings,
   users,
+  xpEvents,
+  type MindMapBranchRecord,
+  type MissedQuizQuestionRecord,
+  type PdfHighlightRecord,
 } from './schema.ts'
 
 function dbErr(context: string, error: unknown): Error {
@@ -23,13 +33,84 @@ function dbErr(context: string, error: unknown): Error {
 
 // ── Notes ────────────────────────────────────────────────────────────────────
 
-export async function listUserNotes(userId: number) {
+export async function syncUserStreak(userId: number): Promise<number> {
   try {
-    return await db
+    const [pomodoros, quizzes, doneTasks] = await Promise.all([
+      db
+        .select({ dt: pomodoroSessions.completedAt })
+        .from(pomodoroSessions)
+        .where(eq(pomodoroSessions.userId, userId))
+        .limit(365),
+      db
+        .select({ dt: quizAttempts.createdAt })
+        .from(quizAttempts)
+        .where(eq(quizAttempts.userId, userId))
+        .limit(365),
+      db
+        .select({ dt: studyTasks.taskDate })
+        .from(studyTasks)
+        .where(and(eq(studyTasks.userId, userId), eq(studyTasks.done, true)))
+        .limit(365),
+    ])
+
+    const activeDays = new Set<string>()
+    for (const row of pomodoros) activeDays.add(row.dt.toISOString().slice(0, 10))
+    for (const row of quizzes) activeDays.add(row.dt.toISOString().slice(0, 10))
+    for (const row of doneTasks) activeDays.add(row.dt.toISOString().slice(0, 10))
+
+    let streak = 0
+    const cursor = new Date()
+    const todayKey = cursor.toISOString().slice(0, 10)
+    if (!activeDays.has(todayKey)) {
+      cursor.setDate(cursor.getDate() - 1)
+    }
+
+    while (streak < 365) {
+      const key = cursor.toISOString().slice(0, 10)
+      if (!activeDays.has(key)) break
+      streak += 1
+      cursor.setDate(cursor.getDate() - 1)
+    }
+
+    const finalStreak = Math.max(1, streak)
+    await db
+      .update(users)
+      .set({ streak: finalStreak, updatedAt: new Date() })
+      .where(eq(users.id, userId))
+
+    return finalStreak
+  } catch (error) {
+    console.error('Streak sync error:', error)
+    return 1
+  }
+}
+
+export async function listUserNotes(userId: number, query?: string, tag?: string) {
+  try {
+    const cleanQ = query?.trim()
+    const cleanTag = tag?.trim().toLowerCase()
+
+    const rows = await db
       .select()
       .from(notes)
-      .where(eq(notes.userId, userId))
+      .where(
+        and(
+          eq(notes.userId, userId),
+          cleanQ
+            ? or(
+                sql`to_tsvector('english', coalesce(${notes.title}, '') || ' ' || coalesce(${notes.content}, '')) @@ plainto_tsquery('english', ${cleanQ})`,
+                ilike(notes.title, `%${cleanQ}%`),
+                ilike(notes.content, `%${cleanQ}%`)
+              )
+            : undefined
+        )
+      )
       .orderBy(desc(notes.updatedAt))
+
+    if (!cleanTag) return rows
+    return rows.filter((n) =>
+      Array.isArray(n.tags) && n.tags.some((t) => t.toLowerCase() === cleanTag)
+    )
   } catch (error) {
     throw dbErr('load notes', error)
   }
@@ -161,17 +242,35 @@ export async function createUserDeck(
 export async function reviewFlashcard(
   userId: number,
   cardId: number,
-  difficulty: 'easy' | 'medium' | 'hard'
+  difficulty: Sm2Rating
 ) {
   try {
-    const days = difficulty === 'easy' ? 7 : difficulty === 'medium' ? 3 : 1
-    const dueDate = new Date(Date.now() + days * 86400000)
+    const [existing] = await db
+      .select()
+      .from(flashcards)
+      .where(and(eq(flashcards.id, cardId), eq(flashcards.userId, userId)))
+      .limit(1)
+
+    if (!existing) return null
+
+    const sm2 = calculateSm2(
+      {
+        easeFactor: existing.easeFactor,
+        intervalDays: existing.intervalDays,
+        repetitions: existing.repetitions,
+      },
+      difficulty
+    )
 
     const [updated] = await db
       .update(flashcards)
       .set({
         difficulty,
-        dueDate,
+        dueDate: sm2.dueDate,
+        easeFactor: sm2.easeFactor,
+        intervalDays: sm2.intervalDays,
+        repetitions: sm2.repetitions,
+        lastReviewedAt: new Date(),
         reviewCount: sql`${flashcards.reviewCount} + 1`,
       })
       .where(and(eq(flashcards.id, cardId), eq(flashcards.userId, userId)))
@@ -180,6 +279,78 @@ export async function reviewFlashcard(
     return updated ?? null
   } catch (error) {
     throw dbErr('update flashcard review', error)
+  }
+}
+
+export async function toggleDeckShare(userId: number, deckId: number, isPublic: boolean) {
+  try {
+    const [existing] = await db
+      .select()
+      .from(flashcardDecks)
+      .where(and(eq(flashcardDecks.id, deckId), eq(flashcardDecks.userId, userId)))
+      .limit(1)
+    if (!existing) return null
+
+    const shareCode = existing.shareCode || crypto.randomBytes(4).toString('hex').toUpperCase()
+    const [updated] = await db
+      .update(flashcardDecks)
+      .set({ isPublic, shareCode })
+      .where(and(eq(flashcardDecks.id, deckId), eq(flashcardDecks.userId, userId)))
+      .returning()
+
+    return updated ?? null
+  } catch (error) {
+    throw dbErr('update deck sharing', error)
+  }
+}
+
+export async function importDeckByShareCode(userId: number, rawCode: string) {
+  try {
+    const code = rawCode.trim().toUpperCase()
+    if (!code) return null
+
+    const [sourceDeck] = await db
+      .select()
+      .from(flashcardDecks)
+      .where(and(eq(flashcardDecks.shareCode, code), eq(flashcardDecks.isPublic, true)))
+      .limit(1)
+
+    if (!sourceDeck) return null
+
+    const sourceCards = await db
+      .select()
+      .from(flashcards)
+      .where(eq(flashcards.deckId, sourceDeck.id))
+      .orderBy(flashcards.id)
+
+    const [createdDeck] = await db
+      .insert(flashcardDecks)
+      .values({
+        userId,
+        name: sourceDeck.name,
+        subject: sourceDeck.subject,
+        isPublic: false,
+      })
+      .returning()
+
+    let insertedCards: Array<typeof flashcards.$inferSelect> = []
+    if (sourceCards.length > 0) {
+      insertedCards = await db
+        .insert(flashcards)
+        .values(
+          sourceCards.map((c) => ({
+            deckId: createdDeck.id,
+            userId,
+            front: c.front,
+            back: c.back,
+          }))
+        )
+        .returning()
+    }
+
+    return { ...createdDeck, cards: insertedCards }
+  } catch (error) {
+    throw dbErr('import shared deck', error)
   }
 }
 
@@ -315,13 +486,31 @@ export async function createStudyTasks(
   }
 }
 
-export async function toggleStudyTask(userId: number, taskId: number, done: boolean) {
+export async function updateStudyTask(
+  userId: number,
+  taskId: number,
+  updates: { done?: boolean; taskDate?: Date; duration?: number }
+) {
   try {
+    const setFields: { done?: boolean; taskDate?: Date; duration?: number } = {}
+    if (typeof updates.done === 'boolean') setFields.done = updates.done
+    if (updates.taskDate instanceof Date && !Number.isNaN(updates.taskDate.getTime())) {
+      setFields.taskDate = updates.taskDate
+    }
+    if (typeof updates.duration === 'number' && Number.isFinite(updates.duration)) {
+      setFields.duration = updates.duration
+    }
+
     const [updated] = await db
       .update(studyTasks)
-      .set({ done })
+      .set(setFields)
       .where(and(eq(studyTasks.id, taskId), eq(studyTasks.userId, userId)))
       .returning()
+
+    if (updated && updates.done === true) {
+      await syncUserStreak(userId)
+    }
+
     return updated ?? null
   } catch (error) {
     throw dbErr('update study task', error)
@@ -349,10 +538,66 @@ export async function listQuizAttempts(userId: number) {
       .from(quizAttempts)
       .where(eq(quizAttempts.userId, userId))
       .orderBy(desc(quizAttempts.createdAt))
-      .limit(20)
+      .limit(30)
   } catch (error) {
     throw dbErr('load quiz history', error)
   }
+}
+
+export function computeWeakTopics(
+  attempts: Array<typeof quizAttempts.$inferSelect>
+) {
+  const byKey = new Map<
+    string,
+    {
+      subject: string
+      topic: string
+      attempts: number
+      scoreSum: number
+      totalSum: number
+      missedQuestions: MissedQuizQuestionRecord[]
+    }
+  >()
+
+  for (const a of attempts) {
+    const topicLabel = (a.topic || a.subject || 'General').trim()
+    const key = `${a.subject}::${topicLabel}`
+    const cur = byKey.get(key) ?? {
+      subject: a.subject,
+      topic: topicLabel,
+      attempts: 0,
+      scoreSum: 0,
+      totalSum: 0,
+      missedQuestions: [],
+    }
+    cur.attempts += 1
+    cur.scoreSum += a.score
+    cur.totalSum += Math.max(1, a.totalQuestions)
+    if (Array.isArray(a.missedQuestions)) {
+      for (const mq of a.missedQuestions) {
+        if (cur.missedQuestions.length < 25) {
+          cur.missedQuestions.push(mq)
+        }
+      }
+    }
+    byKey.set(key, cur)
+  }
+
+  return Array.from(byKey.values())
+    .map((entry) => {
+      const avgPct = entry.totalSum > 0 ? Math.round((entry.scoreSum / entry.totalSum) * 100) : 0
+      return {
+        subject: entry.subject,
+        topic: entry.topic,
+        attempts: entry.attempts,
+        avgScorePct: avgPct,
+        missedCount: entry.missedQuestions.length,
+        missedQuestions: entry.missedQuestions,
+      }
+    })
+    .filter((entry) => entry.avgScorePct < 80 || entry.missedCount > 0)
+    .sort((a, b) => a.avgScorePct - b.avgScorePct || b.missedCount - a.missedCount)
+    .slice(0, 6)
 }
 
 export async function recordQuizAttempt(
@@ -363,6 +608,7 @@ export async function recordQuizAttempt(
     difficulty: string
     score: number
     totalQuestions: number
+    missedQuestions?: MissedQuizQuestionRecord[]
   }
 ) {
   try {
@@ -375,11 +621,12 @@ export async function recordQuizAttempt(
         difficulty: data.difficulty,
         score: data.score,
         totalQuestions: data.totalQuestions,
+        missedQuestions: data.missedQuestions ?? [],
       })
       .returning()
 
     const earnedXp = Math.max(10, data.score * 15)
-    const [updatedUser] = await db
+    await db
       .update(users)
       .set({
         xp: sql`${users.xp} + ${earnedXp}`,
@@ -387,7 +634,17 @@ export async function recordQuizAttempt(
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId))
-      .returning()
+
+    await db.insert(xpEvents).values({
+      userId,
+      source: 'quiz',
+      points: earnedXp,
+      description: `Completed ${data.subject} quiz (${data.score}/${data.totalQuestions})`,
+    })
+
+    await syncUserStreak(userId)
+
+    const [updatedUser] = await db.select().from(users).where(eq(users.id, userId)).limit(1)
 
     return { attempt, xpEarned: earnedXp, user: updatedUser }
   } catch (error) {
@@ -803,9 +1060,70 @@ export async function recordPomodoroSession(
       })
       .where(eq(users.id, userId))
 
+    await db.insert(xpEvents).values({
+      userId,
+      source: 'pomodoro',
+      points: earnedXp,
+      description: `Completed ${durationMinutes}m focus session${subject ? ` (${subject})` : ''}`,
+    })
+
+    await syncUserStreak(userId)
+
     return session
   } catch (error) {
     throw dbErr('record focus session', error)
+  }
+}
+
+export async function getWeeklySummaryContext(userId: number) {
+  try {
+    const weekAgo = new Date(Date.now() - 7 * 86400000)
+    const [userRow, settings, pomodoros, quizzes, tasks, exams, cards, userNotes] = await Promise.all([
+      db.select().from(users).where(eq(users.id, userId)).limit(1),
+      getUserSettings(userId),
+      db.select().from(pomodoroSessions).where(eq(pomodoroSessions.userId, userId)),
+      db.select().from(quizAttempts).where(eq(quizAttempts.userId, userId)).orderBy(desc(quizAttempts.createdAt)),
+      db.select().from(studyTasks).where(eq(studyTasks.userId, userId)),
+      db.select().from(studyExams).where(eq(studyExams.userId, userId)).orderBy(studyExams.examDate),
+      db.select().from(flashcards).where(eq(flashcards.userId, userId)),
+      db.select().from(notes).where(eq(notes.userId, userId)),
+    ])
+
+    const recentPomodoros = pomodoros.filter((p) => p.completedAt >= weekAgo)
+    const recentQuizzes = quizzes.filter((q) => q.createdAt >= weekAgo)
+    const weeklyFocusMinutes = recentPomodoros.reduce((s, p) => s + p.durationMinutes, 0)
+    const quizScoreSum = recentQuizzes.reduce((s, q) => s + q.score, 0)
+    const quizTotalSum = recentQuizzes.reduce((s, q) => s + Math.max(1, q.totalQuestions), 0)
+    const weakTopics = computeWeakTopics(quizzes)
+    const now = new Date()
+    const dueCardsCount = cards.filter((c) => c.dueDate <= now).length
+
+    return {
+      userName: userRow[0]?.name || 'Student',
+      streak: userRow[0]?.streak ?? 1,
+      xp: userRow[0]?.xp ?? 0,
+      dailyGoalMinutes: settings?.dailyGoalMinutes ?? 60,
+      weeklyFocusMinutes,
+      weeklyFocusSessions: recentPomodoros.length,
+      weeklyQuizzesCount: recentQuizzes.length,
+      weeklyQuizAccuracy: quizTotalSum > 0 ? Math.round((quizScoreSum / quizTotalSum) * 100) : null,
+      tasksCompleted: tasks.filter((t) => t.done).length,
+      tasksPending: tasks.filter((t) => !t.done).length,
+      upcomingExams: exams.slice(0, 5).map((e) => ({
+        subject: e.subject,
+        examDate: e.examDate.toISOString().slice(0, 10),
+        hoursNeeded: e.hoursNeeded,
+      })),
+      dueFlashcards: dueCardsCount,
+      totalNotes: userNotes.length,
+      weakTopics: weakTopics.slice(0, 3).map((w) => ({
+        subject: w.subject,
+        topic: w.topic,
+        avgScorePct: w.avgScorePct,
+      })),
+    }
+  } catch (error) {
+    throw dbErr('build weekly summary context', error)
   }
 }
 
@@ -1106,7 +1424,7 @@ export async function getAnalyticsAndMilestones(userId: number) {
 
 export async function getLeaderboard(currentUserId: number) {
   try {
-    const [allUsers, allPomodoros] = await Promise.all([
+    const [allUsers, allPomodoros, allQuizAttempts, allSettings] = await Promise.all([
       db
         .select({
           id: users.id,
@@ -1117,7 +1435,7 @@ export async function getLeaderboard(currentUserId: number) {
         })
         .from(users)
         .orderBy(desc(users.xp), desc(users.streak))
-        .limit(50),
+        .limit(100),
       db
         .select({
           userId: pomodoroSessions.userId,
@@ -1125,6 +1443,20 @@ export async function getLeaderboard(currentUserId: number) {
           completedAt: pomodoroSessions.completedAt,
         })
         .from(pomodoroSessions),
+      db
+        .select({
+          userId: quizAttempts.userId,
+          score: quizAttempts.score,
+          totalQuestions: quizAttempts.totalQuestions,
+          createdAt: quizAttempts.createdAt,
+        })
+        .from(quizAttempts),
+      db
+        .select({
+          userId: userSettings.userId,
+          leaderboardVisible: userSettings.leaderboardVisible,
+        })
+        .from(userSettings),
     ])
 
     const weekAgo = Date.now() - 7 * 86400000
@@ -1135,35 +1467,400 @@ export async function getLeaderboard(currentUserId: number) {
       }
     }
 
-    const sorted = allUsers
-      .map((u) => {
-        const weeklyHours = Math.round(((minsByUser.get(u.id) ?? 0) / 60) * 10) / 10
-        const initials = u.name
+    const quizStatsByUser = new Map<number, { count: number; scoreSum: number; totalSum: number }>()
+    for (const q of allQuizAttempts) {
+      if (q.createdAt.getTime() >= weekAgo) {
+        const cur = quizStatsByUser.get(q.userId) ?? { count: 0, scoreSum: 0, totalSum: 0 }
+        cur.count += 1
+        cur.scoreSum += q.score
+        cur.totalSum += Math.max(1, q.totalQuestions)
+        quizStatsByUser.set(q.userId, cur)
+      }
+    }
+
+    const visibilityMap = new Map<number, boolean>()
+    for (const s of allSettings) {
+      visibilityMap.set(s.userId, s.leaderboardVisible)
+    }
+
+    const currentUserOptedIn = visibilityMap.get(currentUserId) ?? false
+
+    const buildEntry = (u: { id: number; name: string; xp: number; level: number; streak: number }) => {
+      const weeklyHours = Math.round(((minsByUser.get(u.id) ?? 0) / 60) * 10) / 10
+      const qStats = quizStatsByUser.get(u.id)
+      const weeklyQuizzes = qStats?.count ?? 0
+      const weeklyQuizAccuracy = qStats && qStats.totalSum > 0
+        ? Math.round((qStats.scoreSum / qStats.totalSum) * 100)
+        : 0
+      const compositeScore = Math.round(
+        u.xp + weeklyHours * 25 + weeklyQuizzes * 20 + u.streak * 15
+      )
+      const initials =
+        u.name
           .split(/\s+/)
           .filter(Boolean)
           .slice(0, 2)
           .map((part) => part[0]?.toUpperCase() || '')
           .join('') || 'S'
-        return {
-          id: u.id,
-          name: u.name,
-          avatar: initials,
-          xp: u.xp,
-          level: u.level,
-          streak: u.streak,
-          hours: weeklyHours,
-          isCurrentUser: u.id === currentUserId,
-        }
-      })
-      .sort((a, b) => b.xp - a.xp || b.hours - a.hours || b.streak - a.streak)
+
+      return {
+        id: u.id,
+        name: u.name,
+        avatar: initials,
+        xp: u.xp,
+        level: u.level,
+        streak: u.streak,
+        hours: weeklyHours,
+        weeklyQuizzes,
+        weeklyQuizAccuracy,
+        compositeScore,
+        isCurrentUser: u.id === currentUserId,
+      }
+    }
+
+    const optedInUsers = allUsers.filter((u) => visibilityMap.get(u.id) === true)
+    const entries = optedInUsers
+      .map(buildEntry)
+      .sort(
+        (a, b) =>
+          b.compositeScore - a.compositeScore ||
+          b.xp - a.xp ||
+          b.hours - a.hours ||
+          b.streak - a.streak
+      )
       .map((entry, idx) => ({
         ...entry,
         rank: idx + 1,
       }))
 
-    return sorted
+    const currentUserRow = allUsers.find((u) => u.id === currentUserId)
+    const currentUserStats = currentUserRow ? buildEntry(currentUserRow) : null
+
+    return {
+      entries,
+      optedIn: currentUserOptedIn,
+      currentUserStats,
+    }
   } catch (error) {
     throw dbErr('load leaderboard', error)
+  }
+}
+
+// ── Saved PDFs ───────────────────────────────────────────────────────────────
+
+export async function listSavedPdfs(userId: number) {
+  try {
+    return await db
+      .select()
+      .from(savedPdfs)
+      .where(eq(savedPdfs.userId, userId))
+      .orderBy(desc(savedPdfs.updatedAt))
+      .limit(30)
+  } catch (error) {
+    throw dbErr('load saved PDFs', error)
+  }
+}
+
+export async function createSavedPdf(
+  userId: number,
+  data: {
+    fileName: string
+    pageCount: number
+    extractedText: string
+    summary?: string
+    keyPoints?: string[]
+    highlights?: PdfHighlightRecord[]
+    notes?: string
+  }
+) {
+  try {
+    const [created] = await db
+      .insert(savedPdfs)
+      .values({
+        userId,
+        fileName: data.fileName,
+        pageCount: data.pageCount,
+        extractedText: data.extractedText,
+        summary: data.summary ?? '',
+        keyPoints: data.keyPoints ?? [],
+        highlights: data.highlights ?? [],
+        notes: data.notes ?? '',
+      })
+      .returning()
+
+    await db
+      .update(users)
+      .set({
+        xp: sql`${users.xp} + 15`,
+        level: sql`GREATEST(1, FLOOR((${users.xp} + 15) / 500) + 1)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+
+    await db.insert(xpEvents).values({
+      userId,
+      source: 'pdf',
+      points: 15,
+      description: `Saved PDF study guide "${data.fileName}"`,
+    })
+
+    return created
+  } catch (error) {
+    throw dbErr('save PDF', error)
+  }
+}
+
+export async function updateSavedPdf(
+  userId: number,
+  pdfId: number,
+  updates: {
+    summary?: string
+    keyPoints?: string[]
+    highlights?: PdfHighlightRecord[]
+    notes?: string
+  }
+) {
+  try {
+    const [updated] = await db
+      .update(savedPdfs)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(savedPdfs.id, pdfId), eq(savedPdfs.userId, userId)))
+      .returning()
+    return updated ?? null
+  } catch (error) {
+    throw dbErr('update saved PDF', error)
+  }
+}
+
+export async function deleteSavedPdf(userId: number, pdfId: number) {
+  try {
+    const deleted = await db
+      .delete(savedPdfs)
+      .where(and(eq(savedPdfs.id, pdfId), eq(savedPdfs.userId, userId)))
+      .returning({ id: savedPdfs.id })
+    return deleted.length > 0
+  } catch (error) {
+    throw dbErr('delete saved PDF', error)
+  }
+}
+
+// ── Mind Maps ────────────────────────────────────────────────────────────────
+
+export async function listMindMaps(userId: number) {
+  try {
+    return await db
+      .select()
+      .from(mindMaps)
+      .where(eq(mindMaps.userId, userId))
+      .orderBy(desc(mindMaps.updatedAt))
+      .limit(40)
+  } catch (error) {
+    throw dbErr('load mind maps', error)
+  }
+}
+
+export async function createMindMap(
+  userId: number,
+  data: { title: string; root: string; branches: MindMapBranchRecord[] }
+) {
+  try {
+    const [created] = await db
+      .insert(mindMaps)
+      .values({
+        userId,
+        title: data.title,
+        root: data.root,
+        branches: data.branches,
+      })
+      .returning()
+
+    await db
+      .update(users)
+      .set({
+        xp: sql`${users.xp} + 10`,
+        level: sql`GREATEST(1, FLOOR((${users.xp} + 10) / 500) + 1)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, userId))
+
+    await db.insert(xpEvents).values({
+      userId,
+      source: 'mindmap',
+      points: 10,
+      description: `Created mind map "${data.root}"`,
+    })
+
+    return created
+  } catch (error) {
+    throw dbErr('save mind map', error)
+  }
+}
+
+export async function updateMindMap(
+  userId: number,
+  mapId: number,
+  updates: { title?: string; root?: string; branches?: MindMapBranchRecord[] }
+) {
+  try {
+    const [updated] = await db
+      .update(mindMaps)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(mindMaps.id, mapId), eq(mindMaps.userId, userId)))
+      .returning()
+    return updated ?? null
+  } catch (error) {
+    throw dbErr('update mind map', error)
+  }
+}
+
+export async function deleteMindMap(userId: number, mapId: number) {
+  try {
+    const deleted = await db
+      .delete(mindMaps)
+      .where(and(eq(mindMaps.id, mapId), eq(mindMaps.userId, userId)))
+      .returning({ id: mindMaps.id })
+    return deleted.length > 0
+  } catch (error) {
+    throw dbErr('delete mind map', error)
+  }
+}
+
+// ── Achievements & XP Events ─────────────────────────────────────────────────
+
+export async function getAchievementsAndXp(userId: number) {
+  try {
+    const [analytics, existingUnlocked, events, userRow] = await Promise.all([
+      getAnalyticsAndMilestones(userId),
+      db.select().from(userAchievements).where(eq(userAchievements.userId, userId)),
+      db
+        .select()
+        .from(xpEvents)
+        .where(eq(xpEvents.userId, userId))
+        .orderBy(desc(xpEvents.createdAt))
+        .limit(25),
+      db.select().from(users).where(eq(users.id, userId)).limit(1),
+    ])
+
+    const unlockedKeys = new Set(existingUnlocked.map((a) => a.achievementKey))
+    const newlyEarned = analytics.milestones.filter((m) => m.earned && !unlockedKeys.has(m.id))
+
+    if (newlyEarned.length > 0) {
+      let bonusXp = 0
+      for (const m of newlyEarned) {
+        const reward = 50
+        bonusXp += reward
+        await db.insert(userAchievements).values({
+          userId,
+          achievementKey: m.id,
+          title: m.name,
+          xpReward: reward,
+        })
+        await db.insert(xpEvents).values({
+          userId,
+          source: 'achievement',
+          points: reward,
+          description: `Unlocked milestone: ${m.name}`,
+        })
+      }
+      await db
+        .update(users)
+        .set({
+          xp: sql`${users.xp} + ${bonusXp}`,
+          level: sql`GREATEST(1, FLOOR((${users.xp} + ${bonusXp}) / 500) + 1)`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId))
+    }
+
+    const [freshUnlocked, freshEvents, freshUser] = await Promise.all([
+      newlyEarned.length > 0
+        ? db.select().from(userAchievements).where(eq(userAchievements.userId, userId))
+        : Promise.resolve(existingUnlocked),
+      newlyEarned.length > 0
+        ? db
+            .select()
+            .from(xpEvents)
+            .where(eq(xpEvents.userId, userId))
+            .orderBy(desc(xpEvents.createdAt))
+            .limit(25)
+        : Promise.resolve(events),
+      newlyEarned.length > 0
+        ? db.select().from(users).where(eq(users.id, userId)).limit(1)
+        : Promise.resolve(userRow),
+    ])
+
+    return {
+      milestones: analytics.milestones,
+      unlockedAchievements: freshUnlocked,
+      xpEvents: freshEvents,
+      xp: freshUser[0]?.xp ?? 0,
+      level: freshUser[0]?.level ?? 1,
+    }
+  } catch (error) {
+    throw dbErr('load achievements and XP', error)
+  }
+}
+
+// ── User Settings ────────────────────────────────────────────────────────────
+
+export async function getUserSettings(userId: number) {
+  try {
+    const existing = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId))
+      .limit(1)
+    if (existing[0]) return existing[0]
+
+    const [created] = await db
+      .insert(userSettings)
+      .values({ userId })
+      .onConflictDoNothing()
+      .returning()
+
+    if (created) return created
+
+    const [fallback] = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId))
+      .limit(1)
+    return fallback
+  } catch (error) {
+    throw dbErr('load settings', error)
+  }
+}
+
+export async function updateUserSettings(
+  userId: number,
+  updates: {
+    theme?: 'light' | 'dark' | 'system'
+    examReminders?: boolean
+    streakAlerts?: boolean
+    weeklySummary?: boolean
+    leaderboardVisible?: boolean
+    dailyGoalMinutes?: number
+  }
+) {
+  try {
+    await getUserSettings(userId)
+    const [updated] = await db
+      .update(userSettings)
+      .set({
+        ...updates,
+        updatedAt: new Date(),
+      })
+      .where(eq(userSettings.userId, userId))
+      .returning()
+    return updated
+  } catch (error) {
+    throw dbErr('update settings', error)
   }
 }
 
@@ -1178,6 +1875,9 @@ export async function exportAllUserData(userId: number) {
       attendance,
       semesters,
       pomodoros,
+      pdfs,
+      maps,
+      settings,
     ] = await Promise.all([
       listUserNotes(userId),
       listUserDecks(userId),
@@ -1187,6 +1887,9 @@ export async function exportAllUserData(userId: number) {
       listAttendanceSubjects(userId),
       listCgpaSemesters(userId),
       listPomodoroStats(userId),
+      listSavedPdfs(userId),
+      listMindMaps(userId),
+      getUserSettings(userId),
     ])
 
     return {
@@ -1200,6 +1903,9 @@ export async function exportAllUserData(userId: number) {
       attendanceSubjects: attendance,
       cgpaSemesters: semesters,
       pomodoroStats: pomodoros,
+      savedPdfs: pdfs,
+      mindMaps: maps,
+      settings,
     }
   } catch (error) {
     throw dbErr('export workspace data', error)
